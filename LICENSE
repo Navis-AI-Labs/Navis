@@ -1,0 +1,50 @@
+Navis License
+Copyright (c) 2026 Navis Contributors
+
+Permission is hereby granted, free of charge, to any person or organization
+obtaining a copy of this software and associated documentation files (the
+"Software"), to use, copy, modify, and distribute the Software for
+non-commercial purposes, subject to the following conditions:
+
+1. NON-COMMERCIAL USE
+
+   You may use, copy, modify, merge, and distribute the Software for
+   personal, educational, research, or other non-commercial purposes
+   without restriction.
+
+2. COMMERCIAL USE
+
+   Any use of the Software in a commercial environment, including but not
+   limited to:
+   
+   - Deploying the Software as part of a commercial service or product
+   - Using the Software to support commercial operations or revenue-generating activities
+   - Integrating the Software into commercial software or infrastructure
+   
+   requires a separate commercial license. To inquire about commercial
+   licensing, please contact: [contact information to be added]
+
+3. ATTRIBUTION
+
+   The above copyright notice and this permission notice shall be included
+   in all copies or substantial portions of the Software.
+
+4. CONTRIBUTIONS
+
+   By submitting a contribution to this project, you agree that your
+   contribution may be licensed under the same terms as this license.
+
+5. NO WARRANTY
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+   THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+   FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+   DEALINGS IN THE SOFTWARE.
+
+---
+
+For questions about commercial licensing, please open an issue or contact
+the project maintainers.
