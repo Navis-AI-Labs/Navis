@@ -1,0 +1,71 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.*
+
+# Package-manager and build caches
+.pnpm-store/
+.turbo/
+.cache/
+.nx/
+
+# Build output and framework caches
+dist/
+build/
+out/
+.next/
+.nuxt/
+.svelte-kit/
+coverage/
+
+# Runtime output
+logs/
+*.log
+*.pid
+*.pid.lock
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+
+# Local databases and generated storage
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+/data/
+/storage/
+/uploads/
+
+# Temporary project material
+/tmp/
+/temp/
+
+# Test and tooling artifacts
+.nyc_output/
+.eslintcache
+.stylelintcache
+playwright-report/
+test-results/
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# Editors and IDEs
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
+*.swp
+*.swo
+
+# Local deployment overrides
+docker-compose.override.yml
+wrangler.local.jsonc
