@@ -1,0 +1,6 @@
+# CODEOWNERS — Navis
+#
+# All changes require review by the core maintainers team.
+# Split by directory when multiple reviewer teams exist.
+
+* @Navis-AI-Labs/core-maintainers

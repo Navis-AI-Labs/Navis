@@ -1,0 +1,10 @@
+packages:
+  - packages/*
+  - services/*
+  - apps/*
+
+strictPeerDependencies: true
+engineStrict: true
+
+allowBuilds:
+  '@fission-ai/openspec': true
