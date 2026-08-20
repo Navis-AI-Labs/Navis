@@ -1,0 +1,26 @@
+schema: spec-driven
+
+context: |
+  Navis is self-contained and currently establishing its architecture and production foundation.
+  OpenSpec owns observable requirements. Engineering rules live in docs/standards, architecture
+  lives in docs/architecture.md, and technology choices live in docs/adr. Only source explicitly
+  admitted by an active change may exist. Planned packages, apps, and services must not be created
+  as empty directories or README placeholders.
+
+rules:
+  proposal:
+    - State the observable problem, affected capabilities, concrete consumers, and non-goals.
+    - List affected architecture boundaries without creating unimplemented directories.
+    - Identify material decisions that require an ADR.
+  specs:
+    - Requirements use SHALL or MUST and include WHEN/THEN/AND scenarios.
+    - Define externally observable behavior, not coding conventions or framework structure.
+    - State failure, compatibility, concurrency, and security behavior when applicable.
+  design:
+    - Read docs/standards/00-index.md and list every selected standard.
+    - Explain ownership, dependency direction, alternatives, evidence, and unresolved decisions.
+    - Do not select a runtime or dependency without the applicable ADR and admission evidence.
+  tasks:
+    - Order research and review before implementation.
+    - Each implementation task names its workspace unit, accepted requirement, and verification.
+    - Include full repository validation before completion.
