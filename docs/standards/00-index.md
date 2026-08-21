@@ -4,7 +4,7 @@ These standards define how production code is designed, implemented, verified, r
 
 ## Required reading matrix
 
-Every implementation task reads this index and `01-source-code.md`. Read the additional standards selected by the change:
+Every implementation task reads this index and `01-source-code.md` (including the Code philosophy section: simplicity, DRY, composition over inheritance, explicit over implicit, immutable by default). Read the additional standards selected by the change:
 
 | Change type                                                        | Required standards                    |
 | ------------------------------------------------------------------ | ------------------------------------- |
