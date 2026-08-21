@@ -8,6 +8,16 @@
 - Dependencies follow `docs/architecture.md`. A composition root may depend inward; an inner boundary never imports a concrete outer implementation.
 - Public exports are explicit. Broad barrel exports may not make an unstable internal tree public.
 
+## Code philosophy
+
+Defaults with documented boundaries. Deviate only with a comment explaining why.
+
+1. Simplicity over premature complexity. Choose the simplest correct solution. Do not add abstraction until a concrete requirement demands it (YAGNI). Simplicity is not an excuse for missing error handling or edge cases — those are correctness.
+2. DRY — single authoritative source, not "never duplicate." Every piece of knowledge (concept, regex, schema, type, rule) has one authoritative definition; consumers import it. Zod schemas are the single source of truth; TypeScript types are inferred (`z.infer`), never hand-written in parallel. Comments explain why — constraints, tradeoffs, invariants — not what the code does. Boundary: duplication is cheaper than the wrong abstraction (Sandi Metz). Apply the Rule of Three: extract only when a pattern appears in three or more independent call sites. If extraction creates false coupling, document the intentional duplication.
+3. Composition over inheritance. Prefer `implements` + composition over `extends`. Interfaces define capabilities; objects delegate without inheriting a parent's entire surface. Boundary: inheritance is acceptable only for genuine is-a hierarchies satisfying Liskov Substitution — rare in domain modeling; when in doubt, compose.
+4. Explicit over implicit. Signatures describe inputs, outputs, and failure modes. Hidden side effects, magic values, and implicit lifecycle hooks are forbidden. Boundary: do not over-specify trivial operations — explicitness targets contracts and failure modes, not `validateString` returning `boolean`.
+5. Immutable by default. Prefer `readonly`, `const`, and pure functions. Mutation is local, intentional, and behind an owning abstraction. Boundary: for hot paths on large collections, local mutation behind a clean API is acceptable — callers still see an immutable return value.
+
 ## TypeScript baseline
 
 - Production TypeScript uses the repository strict compiler baseline, including unchecked-index, exact-optional-property, implicit-return, override, and unknown-catch checks.
