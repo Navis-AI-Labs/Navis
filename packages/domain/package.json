@@ -1,0 +1,27 @@
+{
+  "name": "@navis/domain",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Navis domain kernel: governed object schemas and asset lifecycle behavior (active change r0-kernel-foundation).",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json --pretty false",
+    "clean": "tsc -b tsconfig.json --clean",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit --pretty false"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3"
+  }
+}

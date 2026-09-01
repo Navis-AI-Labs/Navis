@@ -35,7 +35,7 @@ An OpenSpec design must list its selected standards. An implementation task must
 
 The `foundation-baseline` change is archived. It established reproducible repository tooling and business-neutral public contract primitives. It did not authorize business entities, state machines, use cases, runtime services, persistence, queues, user interfaces, or local Agent integration.
 
-The next active change has not been opened. Only a boundary with executable responsibility in an active change may exist in the code tree. Planned architecture remains in `docs/architecture.md`; do not create empty directories or README placeholders.
+The active change is `r0-kernel-foundation`; Groups 1, 2, 3 and 5-partial (domain workspace, object model per the accepted field baseline, asset lifecycle, schema error registry, domain `ports/event-store.ts`, `packages/infrastructure` with in-memory + PostgreSQL-wire EventStore adapters, migration `001_events.sql`) are implemented and validated. Its Group 4 (project-state kernel runtime: errors registry, replayable projection, action gates) and task 2.3-follow-ups remain planned. Only a boundary with executable responsibility in an active change may exist in the code tree. Planned architecture remains in `docs/architecture.md`; do not create empty directories or README placeholders.
 
 ## Project invariants
 

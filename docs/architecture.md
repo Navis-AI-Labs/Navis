@@ -4,14 +4,15 @@
 
 This document is a reviewable architecture baseline. It defines stable ownership and dependency rules while leaving unresolved business and runtime decisions explicit.
 
-| Area                                                          | Status                                                         |
-| ------------------------------------------------------------- | -------------------------------------------------------------- |
-| Project concept                                               | Defined in the root README                                     |
-| Repository dependency direction                               | Proposed in ADR-0001                                           |
-| Workspace and TypeScript toolchain                            | Proposed in ADR-0002                                           |
-| HTTP contract profile                                         | Proposed in ADR-0003 and implemented as a foundation candidate |
-| Web, API, Worker, persistence, and local integration runtimes | Deferred by ADR-0004                                           |
-| Business domain behavior                                      | Not implemented                                                |
+| Area                                                          | Status                                                                       |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Project concept                                               | Defined in the root README                                                   |
+| Repository dependency direction                               | Proposed in ADR-0001                                                         |
+| Workspace and TypeScript toolchain                            | Proposed in ADR-0002                                                         |
+| HTTP contract profile                                         | Proposed in ADR-0003 and implemented as a foundation candidate               |
+| Web, API, Worker, persistence, and local integration runtimes | Deferred by ADR-0004                                                         |
+| Business domain behavior                                      | Domain object model implemented in the active change                         |
+| Domain-kernel storage abstraction                             | Proposed in ADR-0005 and implemented in the active change (ports + adapters) |
 
 ## System context
 
@@ -46,7 +47,7 @@ The future service trust domain owns authoritative Project records, accountable 
 | Application     | Use-case orchestration and output ports                        | Concrete transport, storage, queue, or framework code             |
 | Infrastructure  | Implementations of Application ports                           | New business policy or public contract ownership                  |
 
-Only Contracts is currently activated as source code because the foundation change gives it a concrete consumer and executable requirements. Other boundaries remain architecture, not empty directories.
+Contracts, the Domain object model, and the Infrastructure persistence adapters (EventStore port with in-memory and PostgreSQL-wire implementations) are currently activated as source code because an active change gives them concrete consumers and executable requirements. Other boundaries (application, services, apps) remain architecture, not empty directories.
 
 ## Compile-time dependency direction
 
@@ -155,9 +156,9 @@ It does not define Project, Work, Candidate, Acceptance, Artifact, or Delivery p
 Navis/
 ├── packages/
 │   ├── contracts/          # active foundation candidate
-│   ├── domain/             # create with first accepted Domain behavior
+│   ├── domain/             # active: object model from r0-kernel-foundation
 │   ├── application/        # create with first accepted use case
-│   └── infrastructure/     # create with first selected external adapter
+│   └── infrastructure/     # active: EventStore port adapters (in-memory, PostgreSQL wire) from r0-kernel-foundation
 ├── services/
 │   ├── api/                # create after API runtime ADR
 │   └── worker/             # create after asynchronous use case and runtime ADR
