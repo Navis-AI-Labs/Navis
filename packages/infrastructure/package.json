@@ -1,0 +1,28 @@
+{
+  "name": "@navis/infrastructure",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Navis infrastructure: engine-neutral persistence adapters implementing domain ports (active change r0-kernel-foundation).",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json --pretty false && rm -rf dist/persistence/postgres/migrations && cp -R src/persistence/postgres/migrations dist/persistence/postgres/migrations",
+    "clean": "tsc -b tsconfig.json --clean",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit --pretty false"
+  },
+  "dependencies": {
+    "@navis/domain": "workspace:*",
+    "postgres": "3.4.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3"
+  }
+}

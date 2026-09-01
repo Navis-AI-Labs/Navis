@@ -18,7 +18,7 @@
     "openspec:validate": "openspec validate --all --strict",
     "test": "vitest run --coverage",
     "typecheck": "pnpm -r --if-present typecheck",
-    "validate": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm boundaries && pnpm test && pnpm build && pnpm openspec:validate"
+    "validate": "pnpm format:check && pnpm build && pnpm lint && pnpm typecheck && pnpm boundaries && pnpm test && pnpm openspec:validate"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

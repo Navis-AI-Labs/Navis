@@ -14,10 +14,16 @@ module.exports = {
       to: { couldNotResolve: true },
     },
     {
+      name: 'domain-imports-no-other-navis-package',
+      severity: 'error',
+      from: { path: '^packages/domain/src' },
+      to: { path: '^packages/(contracts|application)/src' },
+    },
+    {
       name: 'contracts-do-not-import-server-implementation',
       severity: 'error',
       from: { path: '^packages/contracts/src' },
-      to: { path: '^(packages/(application|domain|infrastructure)|services|apps)' },
+      to: { path: '^(packages/(application|domain)|services|apps)' },
     },
   ],
   options: {
