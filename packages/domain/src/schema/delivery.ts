@@ -40,7 +40,7 @@ export const deliverySchema = z
     attempt_no: z.number().int().min(1).max(1000),
     confirmed_by: uuidSchema.optional(), // ref Participant
     confirmed_at: instantSchema.optional(),
-    confirmation_status: deliveryConfirmationStatusSchema,
+    confirmation_status: deliveryConfirmationStatusSchema.default('delivered'),
     // real-world feedback that can re-enter the project as new work
     feedback: textSchema.optional(),
   })

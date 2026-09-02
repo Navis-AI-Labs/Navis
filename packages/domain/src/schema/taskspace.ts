@@ -6,7 +6,8 @@ import { instantSchema } from './time.js';
 /**
  * TaskSpace — the shared working context of one work, exactly id + work_id.
  *
- * Creation time lives in the Event History envelope, not on the object.
+ * Identity anchor plus the governed field quartet; context, participants,
+ * and checkpoints are not part of this type.
  */
 
 export const taskspaceSchema = z
@@ -20,7 +21,7 @@ export const taskspaceSchema = z
   })
   .meta({
     description:
-      'The shared working context of one work. R0 carries only the identity anchor (id + work_id); context, participants, and checkpoints arrive with later changes.',
+      'The shared working context of one work. Carries only the identity anchor (id + work_id); context, participants, and checkpoints are not part of this type.',
     id: 'TaskSpace',
   });
 

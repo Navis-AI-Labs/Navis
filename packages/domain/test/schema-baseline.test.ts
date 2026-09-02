@@ -676,7 +676,7 @@ describe('valid construction of each type', () => {
       dispatched_at: NOW,
       version: 'a'.repeat(64),
       attempt_no: 1,
-      confirmation_status: 'delivered',
+      // confirmation_status omitted: the baseline default 'delivered' applies
     });
     expect(result.success).toBe(true);
   });
@@ -689,7 +689,7 @@ describe('valid construction of each type', () => {
       kind: 'tech_debt',
       severity: 'high',
       status: 'registered',
-      blocks_delivery: false,
+      // blocks_delivery omitted: the baseline default false applies
       statement: 'sub_orders 与 W2 的对接未完成',
       registered_by: uuidv7(),
     });

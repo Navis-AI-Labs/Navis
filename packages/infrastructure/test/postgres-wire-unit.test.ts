@@ -390,6 +390,31 @@ describe('delete-semantics invariants (structural guards, no database)', () => {
 });
 
 describe('deployment shape guards (no database)', () => {
+  it('L2 carries the per-delivery attempt lineage table with its uniqueness constraint', () => {
+    const sqlText = readFileSync(
+      new URL('../src/persistence/postgres/migrations/001_events.sql', import.meta.url),
+      'utf8',
+    );
+    const start = sqlText.indexOf('CREATE TABLE IF NOT EXISTS delivery_attempts ');
+    expect(start).toBeGreaterThan(0);
+    const end = sqlText.indexOf(');', start);
+    const block = sqlText.slice(start, end);
+    expect(block).toMatch(/UNIQUE \(delivery_id, attempt_no\)/);
+    expect(block).toMatch(/deleted_at/);
+    expect(block).toMatch(/outcome\s+text NOT NULL/);
+  });
+
+  it('holds store source-event lineage only in the relation table, not a column array', () => {
+    const sqlText = readFileSync(
+      new URL('../src/persistence/postgres/migrations/001_events.sql', import.meta.url),
+      'utf8',
+    );
+    const start = sqlText.indexOf('CREATE TABLE IF NOT EXISTS holds ');
+    const end = sqlText.indexOf(');', start);
+    expect(sqlText.slice(start, end)).not.toMatch(/source_event_ids/);
+    expect(sqlText).toMatch(/CREATE TABLE IF NOT EXISTS hold_source_events/);
+  });
+
   it('the built package carries the migrations directory — the runner reads it from its own dist path', () => {
     const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
       scripts: Record<string, string>;

@@ -1,3 +1,4 @@
+import { deepFreeze } from '@navis/domain';
 import type { EventEnvelope, EventStore, ProjectionSnapshot } from '@navis/domain';
 
 /**
@@ -37,7 +38,11 @@ export class InMemoryEventStore implements EventStore {
         );
       }
     });
-    for (const e of events) stream.push(e);
+    // Store an owned, deep-frozen copy of each event: the Postgres adapter
+    // serializes rows it exclusively owns behind the INSERT-only trigger, so
+    // a later caller-side mutation of the envelope must not leak into the
+    // stream here either (adapter parity for the immutability contract).
+    for (const e of events) stream.push(deepFreeze(structuredClone(e)));
     this.streams.set(projectId, stream);
   }
 
@@ -52,7 +57,7 @@ export class InMemoryEventStore implements EventStore {
     // A snapshot pins a replay point: the caller vouches that `state` can
     // resume the projection at `seq`. A state without a numeric seq cursor
     // would silently degrade every later load, so both adapters reject it
-    // at write time (Postgres additionally checks on load for legacy rows).
+    // at write time.
     const seq = snapshot.state['seq'];
     if (typeof seq !== 'number' || !Number.isFinite(seq)) {
       throw new Error('snapshot state is missing the required seq cursor');
@@ -61,7 +66,9 @@ export class InMemoryEventStore implements EventStore {
     // highest state_version wins on load, and re-saving an existing version
     // is a no-op — exactly the adapter's ON CONFLICT DO NOTHING.
     const versions = this.snapshots.get(projectId) ?? new Map<number, ProjectionSnapshot>();
-    if (!versions.has(snapshot.state_version)) versions.set(snapshot.state_version, snapshot);
+    if (!versions.has(snapshot.state_version)) {
+      versions.set(snapshot.state_version, deepFreeze(structuredClone(snapshot)));
+    }
     this.snapshots.set(projectId, versions);
   }
 
