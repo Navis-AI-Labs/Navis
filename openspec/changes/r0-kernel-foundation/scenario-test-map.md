@@ -98,6 +98,7 @@
 | F-1      | L2 缺 `delivery_attempts` 表与 `UNIQUE(delivery_id, attempt_no)`（DEC-0009 §6 承诺） | `postgres-wire-unit.test.ts > L2 carries the per-delivery attempt lineage table`（表形+约束+墓碑列断言）         |
 | F-7      | holds `source_event_ids` 列数组与 `hold_source_events` 关系表双存储                  | `postgres-wire-unit.test.ts > holds store source-event lineage only in the relation table`（单存储断言）         |
 | F-2      | zod 层缺基线 default（confirmation_status/blocks_delivery）                          | `schema-baseline.test.ts` 构造矩阵省略字段走 default 断言成功                                                    |
+| A1       | 内存适配器存调用者引用（append 后可改写——Postgres 触发器做不到的事）                 | 适配器修复：append/快照存 structuredClone + deepFreeze 副本；immutability 契约奇偶性恢复                         |
 | X2       | 毒快照（state 无 seq 游标）静默入库                                                  | 双适配器写侧门禁 + conformance 负例                                                                              |
 | X3       | 同版本重写语义相反（覆盖 vs DO NOTHING）                                             | conformance 首写赢断言（对齐 PG ON CONFLICT）                                                                    |
 | X4       | 负/小数游标静默空查                                                                  | conformance 游标归一化（floor 保守截断）+ wire 单元绑定断言                                                      |
