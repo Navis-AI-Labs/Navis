@@ -16,6 +16,7 @@
 | 3.2  | `src/schema/*.ts` 11 个自包含模型文件＋`text.ts`/`time.ts` 共享原语（一文件一概念，字段集照权威基线转写）〔更新：55 用例——字段等值＋10 枚举 set-equality＋正例构造矩阵＋tombstone 守卫〕                                                                                                     | `test/schema-baseline.test.ts` 41 用例                                               |
 | 3.3  | `src/schema/asset.ts` 生命周期表＋purge 常数＋`src/errors/schema.ts` 注册表（11 合法转换＋purge 双条件门＋token→URN 单源）                                                                                                                                                                   | `test/asset-lifecycle.test.ts` 29 用例                                               |
 | 4.3  | `src/ports/event-store.ts`（事件信封 schema＋EventStore 端口）＋`src/ports/clock.ts`（时间端口，零驱动类型）                                                                                                                                                                                 | `test/event-envelope.test.ts` 3 用例＋`test/clock.test.ts` 1 用例                    |
+| 4.1  | `src/state/`（StateEvent 信封 schema＋EventHistory 追加式账本＋canonical JSON/deep-freeze 助手；无 update/delete API，篡改探针守卫）〔守卫：schema 拒绝先于任何变更、seq 缺口拒收、深冻结嵌套写入 throw、无库单元 12 用例〕                                                                  | `test/state-events.test.ts` 12 用例                                                  |
 | 5.1  | `src/persistence/in-memory/in-memory-event-store.ts`〔更新：端口一致性套件 12 场景——追加/冲突/跳号全有或全无/隔离/快照多版本＋首写赢/空批/信封归属/游标归一化；InMemory 与 Postgres 共跑同一组场景〕                                                                                         | `test/in-memory-event-store.test.ts` 5 用例                                          |
 | 5.2  | `src/persistence/postgres/postgres-event-store.ts`＋`migrations/001_events.sql`〔更新：六层 L1–L5＋门禁索引墓碑过滤＋资产归属 CHECK＋INSERT-only 触发器；集成套件带 DATABASE_URL 真库往返（CI service 容器注入）；fake-wire 单元套件无库覆盖全部分支 19 用例，含 F4 回归守卫 18×N 参数断言〕 | 集成套件在 DATABASE_URL 存在时运行，缺席自动 skip；SQL 随 `pnpm validate` 结构门通过 |
 | 5.3  | `src/persistence/postgres/connection.ts`〔更新：连接工厂＋POOL 命名常数＋目录扫描迁移＋sha256 checksum 守卫——漂移拒绝/重跑 no-op/legacy NULL 收编；见 postgres-wire-unit 迁移四分支＋真库篡改实证〕                                                                                          | `test/connection.test.ts` 2 用例                                                     |
@@ -85,19 +86,22 @@
 
 ## 第 4 轮加固场景（字段治理 + 适配器自洽）
 
-| 缺陷     | 场景                                             | 测试/实证                                                                                                        |
-| -------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| S1–S5    | SQL 字段错位/缺列/裸状态列/无长度约束            | schema-baseline 字段等值断言 + 真库结构验证                                                                      |
-| F4       | 批量 INSERT 18 列 17 值（每 append 必炸）        | `postgres-wire-unit.test.ts > one parameter per column per row`（18×N 参数断言，永久回归守卫）                   |
-| F5/F6    | 空批语法错误 / 批内跳号写穿                      | conformance 空批 no-op + 跳号全有或全无（双适配器共跑）                                                          |
-| C2       | 批内失败前缀已写入                               | 同上 all-or-nothing 场景                                                                                         |
-| F8       | 快照语义分叉（last-write-wins vs 多版本）        | conformance `keeps snapshot history and loads the max state_version`                                             |
-| G1       | 信封 project_id 与 append 目标错位               | conformance `rejects an envelope whose project_id differs`（双适配器）                                           |
-| X1       | 并发竞争 unique-violation 漏出原始错误           | `postgres-wire-unit.test.ts > rethrows a concurrent-commit unique violation as version-conflict`（cause 挂根因） |
-| X2       | 毒快照（state 无 seq 游标）静默入库              | 双适配器写侧门禁 + conformance 负例                                                                              |
-| X3       | 同版本重写语义相反（覆盖 vs DO NOTHING）         | conformance 首写赢断言（对齐 PG ON CONFLICT）                                                                    |
-| X4       | 负/小数游标静默空查                              | conformance 游标归一化（floor 保守截断）+ wire 单元绑定断言                                                      |
-| X5       | jsonb null 静默降级 `{}`                         | `rejects a legacy snapshot row whose state arrived null`（存储契约违约显式抛出）                                 |
-| 墓碑     | 门禁索引不看 deleted_at；墓碑早于出生            | 真库 DO-block 三连实证（hold 出闸门/槽位让出/时序 CHECK 拒绝）                                                   |
-| 归属     | assets.project_id NOT NULL 与 org-scope 裁定矛盾 | 真库双分支（org 免填接受 / project 缺失拒绝）+ zod refine 同规则                                                 |
-| checksum | 已应用迁移被静默改动                             | 真库篡改实证 + 单元四分支（fresh/match/drift/legacy-adopt）                                                      |
+| 缺陷     | 场景                                                                                 | 测试/实证                                                                                                        |
+| -------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| S1–S5    | SQL 字段错位/缺列/裸状态列/无长度约束                                                | schema-baseline 字段等值断言 + 真库结构验证                                                                      |
+| F4       | 批量 INSERT 18 列 17 值（每 append 必炸）                                            | `postgres-wire-unit.test.ts > one parameter per column per row`（18×N 参数断言，永久回归守卫）                   |
+| F5/F6    | 空批语法错误 / 批内跳号写穿                                                          | conformance 空批 no-op + 跳号全有或全无（双适配器共跑）                                                          |
+| C2       | 批内失败前缀已写入                                                                   | 同上 all-or-nothing 场景                                                                                         |
+| F8       | 快照语义分叉（last-write-wins vs 多版本）                                            | conformance `keeps snapshot history and loads the max state_version`                                             |
+| G1       | 信封 project_id 与 append 目标错位                                                   | conformance `rejects an envelope whose project_id differs`（双适配器）                                           |
+| X1       | 并发竞争 unique-violation 漏出原始错误                                               | `postgres-wire-unit.test.ts > rethrows a concurrent-commit unique violation as version-conflict`（cause 挂根因） |
+| F-1      | L2 缺 `delivery_attempts` 表与 `UNIQUE(delivery_id, attempt_no)`（DEC-0009 §6 承诺） | `postgres-wire-unit.test.ts > L2 carries the per-delivery attempt lineage table`（表形+约束+墓碑列断言）         |
+| F-7      | holds `source_event_ids` 列数组与 `hold_source_events` 关系表双存储                  | `postgres-wire-unit.test.ts > holds store source-event lineage only in the relation table`（单存储断言）         |
+| F-2      | zod 层缺基线 default（confirmation_status/blocks_delivery）                          | `schema-baseline.test.ts` 构造矩阵省略字段走 default 断言成功                                                    |
+| X2       | 毒快照（state 无 seq 游标）静默入库                                                  | 双适配器写侧门禁 + conformance 负例                                                                              |
+| X3       | 同版本重写语义相反（覆盖 vs DO NOTHING）                                             | conformance 首写赢断言（对齐 PG ON CONFLICT）                                                                    |
+| X4       | 负/小数游标静默空查                                                                  | conformance 游标归一化（floor 保守截断）+ wire 单元绑定断言                                                      |
+| X5       | jsonb null 静默降级 `{}`                                                             | `rejects a legacy snapshot row whose state arrived null`（存储契约违约显式抛出）                                 |
+| 墓碑     | 门禁索引不看 deleted_at；墓碑早于出生                                                | 真库 DO-block 三连实证（hold 出闸门/槽位让出/时序 CHECK 拒绝）                                                   |
+| 归属     | assets.project_id NOT NULL 与 org-scope 裁定矛盾                                     | 真库双分支（org 免填接受 / project 缺失拒绝）+ zod refine 同规则                                                 |
+| checksum | 已应用迁移被静默改动                                                                 | 真库篡改实证 + 单元四分支（fresh/match/drift/legacy-adopt）                                                      |

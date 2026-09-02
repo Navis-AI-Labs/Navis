@@ -52,7 +52,7 @@ CREATE TRIGGER project_events_append_only_guard
 
 CREATE TABLE IF NOT EXISTS acceptances (
   id                uuid PRIMARY KEY,
-  project_id        uuid NOT NULL,
+  project_id        uuid NOT NULL, -- ownership anchor: denormalized from the accepted target's project for gate queries
   target_ref        uuid NOT NULL,
   target_type       text NOT NULL DEFAULT 'Asset' CHECK (target_type = 'Asset'), -- single value
   result            text NOT NULL CHECK (result IN ('accepted', 'rejected', 'conditional')),
@@ -72,13 +72,13 @@ CREATE INDEX IF NOT EXISTS idx_acceptances_target ON acceptances (project_id, ta
 
 CREATE TABLE IF NOT EXISTS deliveries (
   id                  uuid PRIMARY KEY,
-  project_id          uuid NOT NULL,
+  project_id          uuid NOT NULL, -- ownership anchor: denormalized from the delivering asset's project for gate queries
   asset_id            uuid NOT NULL,
   target_ref          text NOT NULL,
   target_type         text NOT NULL CHECK (target_type IN ('staging','production','customer_confirmation','business_process','external_system')),
   dispatched_at       timestamptz NOT NULL, -- the send-out fact
   version             text NOT NULL CHECK (version ~ '^[0-9a-f]{64}$'), -- content.sha256 anchor
-  attempt_no          integer NOT NULL CHECK (attempt_no >= 1),
+  attempt_no          integer NOT NULL CHECK (attempt_no >= 1), -- first-attempt fact on the delivery row
   confirmation_status text NOT NULL DEFAULT 'delivered' CHECK (confirmation_status IN ('delivered','confirmed','rejected','pending')),
   confirmed_by        uuid,
   confirmed_at        timestamptz,
@@ -89,6 +89,24 @@ CREATE TABLE IF NOT EXISTS deliveries (
   updated_at          timestamptz,
   updated_by          uuid,
   CHECK (confirmation_status NOT IN ('confirmed','rejected') OR (confirmed_by IS NOT NULL AND confirmed_at IS NOT NULL))
+);
+
+-- Per-delivery attempt lineage: retries are new fact rows here; attempt_no
+-- is unique per delivery. The open-attempt gate stays on deliveries above.
+CREATE TABLE IF NOT EXISTS delivery_attempts (
+  id            uuid PRIMARY KEY,
+  project_id    uuid NOT NULL, -- ownership anchor: denormalized from the parent delivery for gate queries
+  delivery_id   uuid NOT NULL,
+  attempt_no    integer NOT NULL CHECK (attempt_no >= 1),
+  dispatched_at timestamptz NOT NULL,
+  outcome       text NOT NULL CHECK (outcome IN ('delivered','pending','rejected')),
+  outcome_reason text,
+  created_at    timestamptz NOT NULL,
+  deleted_at    timestamptz,
+  CHECK (deleted_at IS NULL OR deleted_at >= created_at),
+  updated_at    timestamptz,
+  updated_by    uuid,
+  UNIQUE (delivery_id, attempt_no)
 );
 
 -- One open attempt per (asset, target): retries are new rows.
@@ -202,7 +220,6 @@ CREATE TABLE IF NOT EXISTS holds (
   fowler_quadrant      text CHECK (fowler_quadrant IN ('prudent_deliberate','prudent_inadvertent','reckless_deliberate','reckless_inadvertent')),
   blocks_delivery      boolean NOT NULL DEFAULT false,
   statement            text NOT NULL, -- problem body
-  source_event_ids     text[] NOT NULL DEFAULT '{}',
   registered_during_work uuid,
   registered_by        uuid NOT NULL,
   applicability        text, -- in which phase/conditions the hold still applies

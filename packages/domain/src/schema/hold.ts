@@ -56,7 +56,7 @@ export const holdSchema = z
     severity: holdSeveritySchema,
     status: holdStatusSchema,
     fowler_quadrant: fowlerQuadrantSchema.optional(),
-    blocks_delivery: z.boolean(),
+    blocks_delivery: z.boolean().default(false),
     // the problem itself; the registration action's required description lands here
     statement: textSchema,
     source_event_ids: z.array(z.string().min(1).max(128)).max(100).optional(),

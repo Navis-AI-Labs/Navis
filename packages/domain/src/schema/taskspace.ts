@@ -6,7 +6,8 @@ import { instantSchema } from './time.js';
 /**
  * TaskSpace — the shared working context of one work, exactly id + work_id.
  *
- * Creation time lives in the Event History envelope, not on the object.
+ * R0 shape only: identity anchor plus the governed field quartet; context,
+ * participants, and checkpoints arrive with later changes.
  */
 
 export const taskspaceSchema = z
