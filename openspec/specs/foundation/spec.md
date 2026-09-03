@@ -16,9 +16,9 @@ The repository MUST contain source directories and package-level configuration o
 - **AND** no active or accepted change assigns it executable responsibility
 - **THEN** the repository MUST NOT create its code directory, manifest, compiler configuration, or placeholder README
 
-#### Scenario: Contracts is activated by the foundation change
+#### Scenario: an admitted workspace unit keeps its admission artifacts
 
-- **WHEN** Contracts owns runtime schemas and tests required by this change
+- **WHEN** a workspace unit has been admitted by an accepted change and owns runtime schemas and tests
 - **THEN** it MUST have an explicit workspace manifest, compiler boundary, public exports, and verification commands
 
 ### Requirement: public contract types and runtime schemas share one authority
@@ -50,7 +50,7 @@ The Contracts package SHALL provide a success response factory, a cursor-page re
 
 - **WHEN** a service represents a public HTTP failure
 - **THEN** the body SHALL validate as the project RFC 9457 Problem Details profile
-- **AND** it SHALL support unknown extension members for forward compatibility
+- **AND** it SHALL accept unknown extension members as defined by RFC 9457
 
 ### Requirement: request correlation follows standard transport boundaries
 

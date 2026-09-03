@@ -2,15 +2,15 @@
 
 ## Why
 
-The foundation-baseline change is archived; the repository has tooling and business-neutral contracts but zero authorized business behavior. The implementation roadmap defined in the research repository (plan v1.6.0) cannot start without three things existing as accepted, testable behavior: the domain object model (8 core object types with their fields), the project-state kernel (immutable event history + versioned projection), and persistence ports that let the same domain code run against any PostgreSQL-compatible store. Every later task (Actions, Equip, WorkRun, UI) consumes these three, so they must exist first and be right.
+The foundation-baseline change is archived; the repository has tooling and business-neutral contracts but zero authorized business behavior. The implementation roadmap cannot start without three things existing as accepted, testable behavior: the domain object model (8 core object types with their fields), the project-state kernel (immutable event history + versioned projection), and persistence ports that let the same domain code run against any PostgreSQL-compatible store. Every later task (Actions, Equip, WorkRun, UI) consumes these three, so they must exist first and be right.
 
 Deployment reality: the team may deploy on Supabase, self-hosted PostgreSQL, or other Postgres-compatible engines. Platform lock-in at the kernel layer would make those moves architectural rewrites. This change therefore admits the storage abstraction as a first-class capability instead of an afterthought.
 
 ## What Changes
 
 - Add `packages/domain` (new workspace unit, ADR-0001 compliant: imports no other Navis package):
-  - Object schemas exactly per the accepted research baseline: 8 core object types + the Participant registry type (the system's only actor identity). No locally invented fields or enum values — a baseline guard test enforces this.
-  - Project status is the baseline's four values (active/paused/completed/archived); Asset scope is the baseline's five values (participant/session/task/project/organization); Asset content is the baseline's physical-carrier object. Cross-project absorption/merge stays out of the single-project kernel (recorded as a research open question).
+  - Object schemas exactly per the accepted baseline: 8 core object types + the Participant registry type (the system's only actor identity). No locally invented fields or enum values — a baseline guard test enforces this.
+  - Project status is the baseline's four values (active/paused/completed/archived); Asset scope is the baseline's five values (participant/session/task/project/organization); Asset content is the baseline's physical-carrier object. Cross-project absorption/merge stays out of the single-project kernel (an open question outside this change's scope).
   - 8 core object type schemas (Project / Work / TaskSpace / Asset / Acceptance / Delivery / WorkRun / Hold) with zod runtime validation, including the rationale rule (`Acceptance.rationale` required on rejected/conditional, `result` enum accepted/rejected/conditional, symmetric reject/conditional actions data shape).
   - Asset lifecycle 7-state enum + legal-transition table (candidate/active/superseded/competitive_superseded/deprecated/archived/rejected; contested reserved, not enabled).
 - Add `packages/infrastructure` (new workspace unit, implements application/domain output ports — but only the port types live in domain/application per ADR-0001):

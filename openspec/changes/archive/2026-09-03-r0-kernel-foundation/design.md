@@ -2,7 +2,7 @@
 
 ## Context
 
-The repository has an archived foundation: pnpm workspaces, TypeScript 5.9.3 strict via project references, vitest+coverage, dependency-cruiser boundary enforcement, and a business-neutral `@navis/contracts` package (zod 4.4.3). ADR-0001 fixes dependency direction (domain imports nothing Navis; infrastructure implements domain/application ports). No business behavior is admitted yet. The research repo supplies the accepted semantic source: the kernel proposal (object types, Equip/Return, Hold, delivery gate), the acceptance rationale rule (symmetric reject/conditional), the invariant rules, and the verified T1-T26 simulation suites whose assertions this change ports into vitest.
+The repository has an archived foundation: pnpm workspaces, TypeScript 5.9.3 strict via project references, vitest+coverage, dependency-cruiser boundary enforcement, and a business-neutral `@navis/contracts` package (zod 4.4.3). ADR-0001 fixes dependency direction (domain imports nothing Navis; infrastructure implements domain/application ports). No business behavior is admitted yet. The accepted semantic source is the kernel proposal (object types, Equip/Return, Hold, delivery gate), the acceptance rationale rule (symmetric reject/conditional), the invariant rules, and verified behavioral simulation suites whose assertions this change ports into vitest.
 
 Deployment requirement: Supabase is a probable deployment target but MUST NOT become an architectural dependency; self-hosted PostgreSQL must remain equally first-class. The kernel is event-sourced; its storage needs are narrow (append-only event rows, version-guarded appends, snapshot rows) which keeps engine choice cheap.
 
@@ -13,13 +13,13 @@ Deployment requirement: Supabase is a probable deployment target but MUST NOT be
 - Domain object model (8 types) as zod schemas with field-level semantic comments.
 - Project-state kernel: append-only frozen event history, versioned projection rebuilt by replay, optimistic concurrency, boundary/hold/equip/return/delivery semantics per the kernel spec.
 - Engine-neutral EventStore port (domain) + Postgres-wire adapter (infrastructure) + in-memory adapter (infrastructure, tests).
-- 100% of T20-T26 behavior assertions re-expressed as vitest suites over the real domain code (the simulation scripts were the prototype; this code is the product).
+- 100% of the verified behavioral assertions re-expressed as vitest suites over the real domain code (the simulation scripts were the prototype; this code is the product).
 
 **Non-Goals:**
 
 - HTTP/API surface, Actions use-case layer (accept_asset etc. as application use cases), WorkRun transition machine, UI, Equip generation service, auth — later changes.
 - Any Supabase SDK / RLS / Edge Function / Storage usage in core code.
-- Dual-temporal queries (valid_from/valid_to reserved, inert), contested lifecycle transitions, strength computation (fields reserved per the research repository's implementation-plan field rows).
+- Dual-temporal queries (valid_from/valid_to reserved, inert), contested lifecycle transitions, strength computation (fields reserved in the accepted field baseline).
 - Multi-project transactionality across aggregates.
 
 ## Standards selected for this change (per docs/standards/00-index.md matrix)
@@ -38,18 +38,16 @@ Deployment requirement: Supabase is a probable deployment target but MUST NOT be
 
 The EventStore port (domain) has zero driver types. The primary adapter uses `postgres` (postgres.js) — a pure wire-protocol driver. Supabase, Neon, RDS, self-hosted, and local Docker Postgres are all "a connection string" from the kernel's perspective.
 
-- _Alternatives_: (a) Supabase JS SDK as primary — rejected: platform lock-in in core, breaks self-hosted deploys, vendor API churn risk (Terraform/OpenTofu fork precedent: state format lock-in outlives vendor goodwill); (b) Prisma/Drizzle ORM — rejected for this layer: event rows are opaque JSONB with narrow access patterns; an ORM buys nothing and adds schema-mapping weight; (c) raw `pg` driver — viable but postgres.js has cleaner typed SQL and no callback legacy. RLS is explicitly NOT the authorization layer: authorization is a domain concern (invariant rule 8 checks live in the kernel), RLS may later be added as defense-in-depth per deployment, but no behavior may depend on it.
-- _Evidence_: ADR-0004 deferred runtime selection to gates; this decision is the persistence gate outcome. New ADR-0005 records it (task T9).
+- _Alternatives_: (a) Supabase JS SDK as primary — rejected: platform lock-in in core, breaks self-hosted deploys, vendor API churn risk (Terraform/OpenTofu fork precedent: state format lock-in outlives vendor goodwill); (b) Prisma/Drizzle ORM — rejected for this layer: event rows are opaque JSONB with narrow access patterns; an ORM buys nothing and adds schema-mapping weight; (c) raw `pg` driver — viable but postgres.js has cleaner typed SQL and no callback legacy. RLS is explicitly NOT the authorization layer: authorization is a domain concern (the kernel's forbidden checks), RLS may later be added as defense-in-depth per deployment, but no behavior may depend on it.
+- _Evidence_: ADR-0004 deferred runtime selection to gates; this decision is the persistence gate outcome. New ADR-0005 records it.
 
 ### D2 — zod for domain schemas (not typebox/valibot/plain TS types)
 
 `@navis/contracts` already depends on zod 4.4.3; the runtime-schema need is identical (validate, derive TS types, structured field-level errors). Plain TS types give zero runtime guarantee — the kernel's adversarial surfaces (agent-submitted payloads) need runtime validation. `.meta({ id })` naming follows the contracts package precedent. Domain defines its own schemas (no import from contracts — contracts is transport-shaped).
 
-- _Evidence_: docs/standards/06 (public schemas as zod) and 04 (input validation) apply.
+- _Evidence_: docs/standards/06 (public schemas as zod) and 04 (input validation) apply.### D3 — Kernel shape: class-based aggregate with frozen event list + replayable projection
 
-### D3 — Kernel shape: class-based aggregate with frozen event list + replayable projection
-
-Matches the verified T24/T25/T26 mini-kernel shape, hardened: events frozen at append (Object.freeze deep on data), no update/delete methods, `rebuildProjection()` used by integrity checks and tests, canonical-JSON comparison for replay equality. Logical time is caller-supplied (`at`), keeping the kernel deterministic for tests (no hidden clock).
+Matches the verified mini-kernel shape, hardened: events frozen at append (Object.freeze deep on data), no update/delete methods, `rebuildProjection()` used by integrity checks and tests, canonical-JSON comparison for replay equality.
 
 - _Alternatives_: (a) pure functions over event arrays — rejected: aggregate identity and encapsulation of the append guard are clearer as a class; (b) external event-store library (@eventstore/db-client etc.) — rejected: platform coupling, the semantics are 300 lines, not worth a dependency.
 
@@ -59,9 +57,9 @@ Matches the verified T24/T25/T26 mini-kernel shape, hardened: events frozen at a
 packages/domain/src/
   schema/           # table structures only: one self-contained file per object type
                     # (asset.ts carries its lifecycle table and purge constant) + ids/text/time primitives
-  errors/           # per-module closed error registries (schema.ts now; kernel.ts with task 4.2)
-  state/            # (later task group) event envelope, ProjectStateKernel, delivery-gate
-  ports/            # (later task group) EventStore port, ClockPort (interfaces only)
+  errors/           # per-module closed error registries (schema.ts then; kernel.ts with the kernel group)
+  state/            # (kernel task group) event envelope, ProjectStateKernel, delivery-gate
+  ports/            # (kernel task group) EventStore port, ClockPort (interfaces only)
 packages/infrastructure/src/
   persistence/
     in-memory/      # InMemoryEventStore
@@ -78,9 +76,7 @@ dependency-cruiser: domain must import no Navis package; infrastructure may impo
 Mutable-row CRUD convention bundles every table with created_at/updated_at, a soft-delete flag, an untyped extension column, and implicit persistence hooks. That convention optimizes for rows that change in place. Navis is event-sourced: rows never mutate, so updated_at/soft-delete/updated_by would be second sources of truth that drift from the ledger. Adopted (aligned to the accepted kernel schema baseline): identity field `id` as time-ordered UUIDv7 (the baseline declares plain uuid; UUIDv7 is the implementation choice — monotonic time-prefix ordering without an external ID-generation service), timestamptz instants, actor identity expressed exclusively as Participant refs (the accepted baseline's registry type — no bare actor-id strings), event-payload JSONB instead of an ext column, lifecycle transitions instead of a deleted flag. The baseline stores no creation-actor columns on core objects (creation provenance is derived from the first event); only Hold.registered_by / registered_during_work, Delivery.confirmed_by, Acceptance.actor, and WorkRun.participant_id exist, exactly as the baseline defines them. Negative assertions (no updated_at / deleted / ext on any schema) are spec scenarios with matching vitest guard tests. Base-model fields exist by product-owner direction — create, read, update, AND delete — under a governed mechanism: every registry object carries the governed base-model quartet: created_at (birth stamp), deleted_at (tombstone — nullable instant, never a boolean; set = retired, null = live), and updated_at/updated_by (event-derived read cache: present in the schema shape and in the row, but writable EXCLUSIVELY by the projection replay path — any command-path write is an invariant violation; if the cache ever drifts it is rebuildable by replay and therefore harmless). Equip (derived, never stored) and Checkpoint (its captured_at is the birth stamp) are the two intentional exemptions. Hard DELETE remains unrepresentable: the tombstone is instant semantics with ledger-anchored retirement, and event-layer immutability (5.x) still rejects physical row deletion. Negative assertions are: no deleted boolean, no untyped ext on any schema, and no command-path setter for updated_at/updated_by — each a spec scenario with a matching vitest guard test.
 
 - _Alternatives_: adopt the base struct verbatim — rejected: double truth on deletion and provenance, untyped column undermines field governance; per-object creation-actor columns beyond the baseline — rejected: un-accepted local invention; creation provenance stays event-derived (the baseline's choice, and it keeps the schema smaller).
-- _Reserved fields are baseline, not invention_: Asset.valid_from/valid_to and quality_signals are part of the accepted baseline — present in schema, default null, no behavior reads them. Do not remove them in the name of minimalism; they are the accepted baseline's forward-compatibility anchors.
-
-### D14 — Version semantics are four distinct concepts
+- _Reserved fields are baseline, not invention_: Asset.valid_from/valid_to and quality_signals are part of the accepted baseline — present in schema, default null, no behavior reads them. Do not remove them in the name of minimalism; they are the accepted baseline's forward-compatibility anchors.### D14 — Version semantics are four distinct concepts
 
 One `current_state_version` field cannot simultaneously be the event counter ("version equals event count" acceptance wording), the per-boundary-update counter (kernel proposal), the per-state-changing-event counter (kernel spec), and the replay cursor. The split:
 
@@ -95,7 +91,7 @@ Consequences: `redirect_work` appends an event and bumps the Work aggregate revi
 
 ### D15 — Accepted field baseline
 
-Applied in tasks 3.x:
+Applied in the schema task group:
 
 - Project's need field is `purpose` (schema-layer domain neutrality);
 - Hold carries `statement` (required — the problem itself; the landing place for the register action's required description) and `applicability` (when/where the hold still applies, kept distinct from Asset validity); the header comment states the three-field split (statement = what, source_event_ids = why, applicability = when/where);
@@ -103,12 +99,12 @@ Applied in tasks 3.x:
 - Delivery: `dispatched_at` (delivered = sent out; semantics pinned in the spec), `target_ref` (typed ref: internal object id or external URI), `version` (= delivered Asset content.sha256 anchor), `attempt_no` (retry after rejection is a new attempt, not an in-place status rewrite);
 - Checkpoint: `captured_at` plus `state_version`, `position`, `resume_ref` — recovery needs a position, not just a moment; stays quartet-exempt;
 - WorkRun carries `parent_run_id`, `input_state_version`, `attempt`, `checkpoint_id`; external execution references (runtime/adapter/device/capability/resume_command_ref/expires_at/idempotency_key/causation_id/correlation_id) live in one `execution_refs` JSONB field (external protocol IDs are execution references, not business keys); intervention sessions carry `consent_status`;
-- WorkRun/TaskSpace/Checkpoint rows are projections of the run/execution layer in R0: TaskSpace keeps its schema but no standalone table; no physical Equip table exists in any phase of this change;
+- WorkRun/TaskSpace/Checkpoint rows are projections of the run/execution layer: TaskSpace keeps its schema but no standalone table; no physical Equip table exists;
 - `uuidSchema` splits: Navis-owned ids validate as full UUIDv7 (RFC 9562 version+variant bits); external system references use an opaque `external_ref` schema — one loose regex no longer serves both;
-- Asset carries `project_id` with a cross-field rule: required unless scope=organization (the cross-project ownership rule is registered as research OQ-49, DEC-0009 — not decided in this change);
+- Asset carries `project_id` with a cross-field rule: required unless scope=organization (the broader cross-project ownership rule is an open question outside this change's scope; the storage shape is carried here without deciding it);
 - Asset.valid_from/valid_to stay reserved-inert; removal would require a supersede, never a silent drop.
 
-The physical PostgreSQL design (layered L1 ledger / L2 fact rows / L3 projections / L4 read models / L5 relation tables / L6 ephemeral; relation tables for work_dependencies, hold_source_events, hold_assets, intervention_sessions, delivery_attempts, workrun refs; effect_ledger and command_inbox as delivery-gate authority; partial indexes for the gate query; event_retention_marks for retention classes; INSERT-only trigger; RLS as defense-in-depth only) lands in task 5.2's migration SQL.
+The physical PostgreSQL design (layered L1 ledger / L2 fact rows / L3 projections / L4 read models / L5 relation tables / L6 ephemeral; relation tables for work_dependencies, hold_source_events, hold_assets, intervention_sessions, delivery_attempts, workrun refs; effect_ledger and command_inbox as delivery-gate authority; partial indexes for the gate query; event_retention_marks for retention classes; INSERT-only trigger; RLS as defense-in-depth only) lands with the infrastructure migration task.
 
 ### D6 — Composition roots assemble adapters explicitly; no placeholder wiring
 
@@ -130,14 +126,14 @@ Error-code mechanism (per module):
 - A single `defineRegistry(module, tokens)` helper freezes the token map, derives the typed key union, and produces the external URN form `<module>/<token>` (e.g. `kernel/version_conflict`) — the URN is the stable cross-module/transport contract and maps 1:1 onto RFC 9457 problem-details `type` later.
 - Namespace rule: `<module>/` prefixes are unique across the system; two modules cannot emit the same URN (checked by the central module registry).
 - Enum governance boundary (fixed for all later changes): closed enums are for internal state machines only — their consumers live in this repo and value additions ship as same-repo changes. Cross-boundary machine identifiers (error URNs, schema meta ids) are governed as closed, add-only contracts; human-language fields (role, validity, provenance) stay free text — an organization's vocabulary must never be frozen into an enum. Extending an enum that outside consumers switch over is, by definition, a breaking change and must ship as a contract-versioned change.
-- Evolution: registries are add-only — renaming or reusing a token for different meaning is a breaking contract change and forbidden; retiring a token requires a deprecation window (kept as `@deprecated` entries that still resolve).
+- Evolution: registries are add-only — renaming or reusing a token for different meaning is a breaking contract change and forbidden.
 - Domain error objects carry `{ code, details? }` only — no localized message. Message rendering and code→HTTP-status mapping belong to edge/API changes.
 
 Constants mechanism (same governance, lower stakes):
 
-- Tuning constants (equip size budget, purge age threshold, competitive grace period, pool sizing) are declared with provenance inside their owning capability's file — a constant is part of the capability it tunes, not a standalone `constants.ts` junk drawer (standards 01 rejects cross-capability dumping); the competitive grace window (invariant rule 15, 90 days) lands with its consumer in task 4.2.
+- Tuning constants (equip size budget, purge age threshold, competitive grace period, pool sizing) are declared with provenance inside their owning capability's file — a constant is part of the capability it tunes, not a standalone `constants.ts` junk drawer (standards 01 rejects cross-capability dumping); the competitive grace window (90 days) lands with its consumer in the kernel task.
 - Constants are values, not codes: changing a default is a reviewed config change, not a contract break; the registry makes every such value findable and testable.
-- This change ships two registries in `packages/domain/src/errors/` (one file per module, the domain's error capability directory — never inside `schema/`, which holds only table structures): `errors/schema.ts` (construction and lifecycle rejections) now, and `errors/kernel.ts` (operation rejections) with task 4.2; later modules (workrun, delivery, api) add their own files under the same rules. The central module-registry enforces namespace uniqueness across the two.
+- This change ships two registries in `packages/domain/src/errors/` (one file per module, the domain's error capability directory — never inside `schema/`, which holds only table structures): `errors/schema.ts` (construction and lifecycle rejections) and `errors/kernel.ts` (operation rejections); later modules (workrun, delivery, api) add their own files under the same rules. The central module-registry enforces namespace uniqueness across the two.
 
 ### D9 — No DI framework; composition roots wire dependencies explicitly
 
@@ -157,7 +153,7 @@ Domain objects do not embed a GORM-`Base`-style common ancestor (id/created_at/u
 
 - _Alternatives_: (a) a `BaseSchema` mixin all objects extend — rejected: a common ancestor would smuggle updated_at/soft-delete onto every type and invite the exact drift this change guards against (created_at is adopted explicitly as part of the governed quartet, not via inheritance); (b) per-object timestamps "because every system has them" — rejected as a motive: created_at exists because the product owner directed the base-model field set with a governed mechanism, not by reflex.
 
-T17b immutability attacks → kernel append tests; T9 optimistic concurrency → version-conflict tests; T13 lifecycle → transition table tests; T20 rationale → schema refinement tests; T21 delivery gate → kernel delivery tests; T23 permission → actor-gate tests; T24/T25/T26 scenario arcs → integration-style kernel tests (in-memory adapter). The research scripts remain the evidence trail; the vitest suites are the product's guard.
+Immutability attacks → kernel append tests; optimistic concurrency → version-conflict tests; lifecycle → transition table tests; rationale → schema refinement tests; delivery gate → kernel delivery tests; permission → actor-gate tests; full scenario arcs → integration-style kernel tests (in-memory adapter). The verified simulation suites are the evidence trail; the vitest suites are the product's guard.
 
 ### D13 — Enterprise-hardening benchmarks behind the model (mechanism patterns only)
 
@@ -173,19 +169,19 @@ The schema layer was stress-tested against the publicly documented engineering p
 ## Risks / Trade-offs
 
 - [Frozen-event detection differs across transports (a Postgres round-trip loses freezing)] → Immutability is enforced at three layers: domain (Object.freeze + no mutator API), storage (Postgres trigger rejecting UPDATE/DELETE on event rows), and replay equality (tamper detection). Spec scenarios test each layer separately.
-- [zod schema drift vs the accepted research baseline] → The baseline guard test pins field/enum sets; the domain spec's field-baseline table is the review contract with the maintainer.
+- [zod schema drift vs the accepted baseline] → The baseline guard test pins field/enum sets; the domain spec's field-baseline table is the review contract with the maintainer.
 - [postgres.js version churn] → pinned exact version like all repo deps; ADR-0005 records the choice and reconsideration criteria.
-- [Replay cost growth with event volume] → This change accepts full replay (a 200-event replay-integrity experiment passed in the research repository); snapshotting is a later change — the port already carries saveSnapshot/loadSnapshot so the cost path is pre-wired.
+- [Replay cost growth with event volume] → This change accepts full replay (a 200-event replay-integrity experiment passed during design verification); snapshotting is a later change — the port already carries saveSnapshot/loadSnapshot so the cost path is pre-wired.
 - [Kernel API surface creep] → New semantics (WorkRun machine, Actions layer) come as later changes with their own specs; the kernel admits nothing beyond this change's spec.
 
 ## Migration Plan
 
-New packages only; nothing existing changes. Rollback = revert the change commit; no data exists yet. Migrations run forward-only, idempotent (IF NOT EXISTS), tracked in a schema_migrations table with per-file sha256 checksums (editing an applied migration fails loudly; legacy checksum-less rows are adopted on first run).
+New packages only; nothing existing changes. Rollback = revert the change commit; no data exists yet. Migrations run forward-only, idempotent (IF NOT EXISTS), tracked in a schema_migrations table with per-file sha256 checksums (editing an applied migration fails loudly).
 
 ## Open Questions
 
 - Postgres trigger vs rule for event-row immutability — **closed: trigger**. Verified on a live PostgreSQL 15 instance: UPDATE/DELETE on the ledger raise inside the trigger and the append transaction rolls back atomically; rules are global rewrites and cannot enforce per-row INSERT-only semantics.
-- Asset organization-scope ownership (the cross-project rule for rows without a project anchor) is not decided here — registered as research **OQ-49** (DEC-0009). This change carries the ruling's storage shape only: `project_id` is nullable with a CHECK that requires it for every non-organization scope, mirroring the schema-layer refine.
+- Asset organization-scope ownership (the cross-project rule for rows without a project anchor) is an open question outside this change's scope. This change carries the storage shape only: `project_id` is nullable with a CHECK that requires it for every non-organization scope, mirroring the schema-layer refine.
 - Offline bidirectional merge: conflict detection via vector clocks/epochs, explicit conflict marking, and Candidate Merge review — never automatic merging. This change only guarantees single-writer append semantics; the offline-merge design lands as its own change with its own spec.
-- Whether Equip budget is per-project config or global constant — **closed for R0: a global constant** (the grace constant lands with the kernel error registry in task 4.2); per-project config is a later change.
+- Whether Equip budget is per-project config or global constant — **closed: a global constant** (the grace constant lands with the kernel error registry in the kernel task); per-project config is a later change.
 - Snapshot cadence policy (deferred to the snapshotting change).

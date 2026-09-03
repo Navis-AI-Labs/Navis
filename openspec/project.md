@@ -33,9 +33,9 @@ An OpenSpec design must list its selected standards. An implementation task must
 
 ## Current phase
 
-The `foundation-baseline` change is archived. It established reproducible repository tooling and business-neutral public contract primitives. It did not authorize business entities, state machines, use cases, runtime services, persistence, queues, user interfaces, or local Agent integration.
+Two changes are archived: `foundation-baseline` (reproducible repository tooling and business-neutral public contract primitives) and `r0-kernel-foundation` (domain object model per the accepted field baseline, asset lifecycle, schema and kernel error registries, the project-state kernel runtime — append-only event history, replayable versioned projection, gated commands —, the domain `ports/event-store.ts`, and `packages/infrastructure` with in-memory + PostgreSQL-wire EventStore adapters and migration `001_events.sql`).
 
-The active change is `r0-kernel-foundation`; Groups 1, 2, 3 and 5-partial (domain workspace, object model per the accepted field baseline, asset lifecycle, schema error registry, domain `ports/event-store.ts`, `packages/infrastructure` with in-memory + PostgreSQL-wire EventStore adapters, migration `001_events.sql`) are implemented and validated. Its Group 4 (project-state kernel runtime: errors registry, replayable projection, action gates) and task 2.3-follow-ups remain planned. Only a boundary with executable responsibility in an active change may exist in the code tree. Planned architecture remains in `docs/architecture.md`; do not create empty directories or README placeholders.
+No change is currently active. The repository is between changes: the implemented capabilities live under `openspec/specs/` as accepted behavior, and the next change must be proposed, reviewed, and admitted before any new boundary materializes in the code tree. Only a boundary with executable responsibility in an active change may exist in the code tree. Planned architecture remains in `docs/architecture.md`; do not create empty directories or README placeholders.
 
 ## Project invariants
 
