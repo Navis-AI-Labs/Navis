@@ -23,6 +23,7 @@ function evt(
     actor: 'p-1',
     at,
     state_version: 0,
+    schema_version: 1,
     ...extra,
   });
 }
@@ -74,7 +75,7 @@ describe('state event schema', () => {
   });
 });
 
-describe('EventHistory (task 4.1)', () => {
+describe('EventHistory', () => {
   it('appends with gapless monotonic seq: 1, 2, 3', () => {
     const h = new EventHistory();
     h.append(evt(1));

@@ -4,8 +4,9 @@ import { z } from 'zod';
  * The kernel's event record: the in-memory runtime counterpart of the
  * storage envelope. Six semantic fields per the spec — seq (monotonic,
  * 1-based), type, data, actor, at (caller-supplied logical time), and
- * state_version (the Project State version AFTER this event). Events are
- * deep-frozen on append and compared via canonical JSON.
+ * state_version (the Project State version AFTER this event) — plus the
+ * envelope schema version stamped on append. Events are deep-frozen on
+ * append and compared via canonical JSON.
  */
 
 export const stateEventSchema = z
@@ -20,6 +21,8 @@ export const stateEventSchema = z
     // Project State version after this event; State-material events
     // increment it, everything else repeats the current version
     state_version: z.number().int().min(0),
+    // envelope schema version, stamped by the kernel on every appended event
+    schema_version: z.number().int().min(1),
   })
   .meta({
     description:
