@@ -20,6 +20,9 @@ export const stateEventSchema = z
     // Project State version after this event; State-material events
     // increment it, everything else repeats the current version
     state_version: z.number().int().min(0),
+    // envelope schema_version (task 4.2): stamped by the kernel on every
+    // appended event; optional so ledger rows predating the field stay valid
+    schema_version: z.number().int().min(1).optional(),
   })
   .meta({
     description:
