@@ -1,4 +1,6 @@
 export { canonicalEquals, canonicalJson, deepFreeze, parseCanonicalJson } from './canonical.js';
+export { advanceClock, compareClocks, mergeClocks } from './vector-clock.js';
+export type { ClockSnapshot, ClockVerdict } from './vector-clock.js';
 export { EventHistory } from './event-history.js';
 export { stateEventSchema, type StateEvent } from './events.js';
 export {

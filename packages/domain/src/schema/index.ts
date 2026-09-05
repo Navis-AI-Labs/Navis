@@ -33,6 +33,8 @@ export {
   type TransitionResult,
 } from './asset.js';
 
+export { causalClockSnapshotSchema, type CausalClockSnapshot } from './causal-clock.js';
+
 export { checkpointSchema, type Checkpoint } from './checkpoint.js';
 
 export {

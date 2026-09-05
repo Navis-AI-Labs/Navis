@@ -894,6 +894,8 @@ describe('kernel: replay identity (200 events) + project time', () => {
     const rebuilt = ProjectStateKernel.fromEvents(k.events);
     expect(canonicalJson(rebuilt.projection)).toBe(canonicalJson(k.projection));
     expect(rebuilt.stateVersion).toBe(k.stateVersion);
+    // replay rebuild equality extends to the causal clock
+    expect(rebuilt.causal_clock).toEqual(k.causal_clock);
     expect(k.verifyIntegrity().ok).toBe(true);
   });
 

@@ -306,22 +306,24 @@ describe('PostgresEventStore against a scripted wire (unit, no database)', () =>
 });
 
 describe('runMigrations against a scripted wire (unit, no database)', () => {
-  it('applies a fresh migration and records version + sha256 checksum', async () => {
+  it('applies fresh migrations in order and records version + sha256 checksum', async () => {
     const fake = makeFakeSql();
     await runMigrations(fake.sql);
+    // one transaction per migration file
     expect(fake.beginCount()).toBe(1);
-    const insert = fake.queries.find((q) => q.text.includes('INSERT INTO schema_migrations'));
-    expect(insert).toBeDefined();
-    expect(insert?.params?.[0]).toBe('001_events');
-    expect(insert?.params?.[1]).toMatch(/^[0-9a-f]{64}$/);
+    const inserts = fake.queries.filter((q) => q.text.includes('INSERT INTO schema_migrations'));
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0]?.params?.[0]).toBe('001_events');
+    expect(inserts[0]?.params?.[1]).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('is a no-op when the applied checksum matches the file', async () => {
     const fresh = makeFakeSql();
     await runMigrations(fresh.sql);
-    const insert = fresh.queries.find((q) => q.text.includes('INSERT INTO schema_migrations'));
-    const checksum = insert?.params?.[1] as string;
-    const again = makeFakeSql({ appliedRows: [{ version: '001_events', checksum }] });
+    const checksums = fresh.queries
+      .filter((q) => q.text.includes('INSERT INTO schema_migrations'))
+      .map((q) => ({ version: q.params?.[0] as string, checksum: q.params?.[1] as string }));
+    const again = makeFakeSql({ appliedRows: checksums });
     await runMigrations(again.sql);
     expect(again.beginCount()).toBe(0);
   });
@@ -483,6 +485,18 @@ describe('deployment shape guards (no database)', () => {
     const end = sqlText.indexOf(');', start);
     expect(sqlText.slice(start, end)).not.toMatch(/source_event_ids/);
     expect(sqlText).toMatch(/CREATE TABLE IF NOT EXISTS hold_source_events/);
+  });
+
+  it('the causal clock rides the project row as a nullable jsonb read cache', () => {
+    const sqlText = readFileSync(
+      new URL('../src/persistence/postgres/migrations/001_events.sql', import.meta.url),
+      'utf8',
+    );
+    const start = sqlText.indexOf('CREATE TABLE IF NOT EXISTS projects ');
+    const end = sqlText.indexOf(');', start);
+    const block = sqlText.slice(start, end);
+    // nullable jsonb: a project's clock is empty until its first event
+    expect(block).toMatch(/causal_clock\s+jsonb/);
   });
 
   it('the built package carries the migrations directory — the runner reads it from its own dist path', () => {

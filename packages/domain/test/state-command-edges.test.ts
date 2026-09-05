@@ -56,11 +56,11 @@ function seeded(): World {
 }
 
 /**
- * Command-surface rejection edges: every guard branch of the R0-03 /
- * R0-27/28 / R0-49-51 command layer, driven one step past the happy
- * paths — unknown actors, missing or foreign references, stale
- * concurrency tokens, and terminal-state violations. Each case asserts
- * both the rejection and the exact registry reason.
+ * Command-surface rejection edges: every guard branch of the command
+ * layer, driven one step past the happy paths — unknown actors, missing
+ * or foreign references, stale concurrency tokens, and terminal-state
+ * violations. Each case asserts both the rejection and the exact
+ * registry reason.
  */
 const GHOST = '0198b100-0000-7000-8000-00000000ffff';
 const OTHER_RUN = '0198b500-0000-7000-8000-000000000002';

@@ -259,7 +259,13 @@ describeIntegration('PostgresEventStore (integration, DATABASE_URL set)', () => 
       await runMigrations(sql); // second run: all applied, no-op
       const rows = await sql`SELECT version, checksum FROM schema_migrations ORDER BY version`;
       expect(rows.map((r) => String(r['version']))).toEqual(['001_events']);
-      expect(rows[0]?.['checksum']).toMatch(/^[0-9a-f]{64}$/);
+      for (const row of rows) expect(row['checksum']).toMatch(/^[0-9a-f]{64}$/);
+      // the causal clock column exists on the project table
+      const cols = await sql`
+        SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'projects' AND column_name = 'causal_clock'
+      `;
+      expect(cols).toHaveLength(1);
     } finally {
       await sql.end({ timeout: 0 });
     }

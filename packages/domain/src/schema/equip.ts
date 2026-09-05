@@ -1,12 +1,14 @@
 import { z } from 'zod';
 
+import { causalClockSnapshotSchema } from './causal-clock.js';
 import { uuidSchema } from './ids.js';
 
 /**
  * Equip — the execution contract derived from a project state version and
  * issued to one participant.
  *
- * Assembled at generation time, never stored as independent business data.
+ * Assembled at generation time, never stored as independent business data;
+ * the causal snapshot is stamped at issuance.
  */
 
 export const equipStatusSchema = z.enum(['active', 'stale', 'expired']).meta({
@@ -22,6 +24,7 @@ export const equipSchema = z
     participant_id: uuidSchema.optional(), // ref Participant — who is equipped
     allowed_actions: z.array(z.string().min(1).max(128)).max(100).optional(),
     schema_snapshot_version: z.number().int().min(0).optional(),
+    causal_snapshot: causalClockSnapshotSchema.optional(),
     status: equipStatusSchema,
   })
   .meta({

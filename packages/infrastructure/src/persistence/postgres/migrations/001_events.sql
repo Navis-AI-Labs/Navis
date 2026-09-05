@@ -147,6 +147,10 @@ CREATE TABLE IF NOT EXISTS projects (
   status               text NOT NULL CHECK (status IN ('active','paused','completed','archived')),
   current_state_version bigint NOT NULL DEFAULT 0 CHECK (current_state_version >= 0),
   acceptance_criteria  jsonb,
+  -- authoritative causal clock read cache, participant id to events seen,
+  -- rebuildable in full from event authorship, same convention as the
+  -- other L3 projection caches
+  causal_clock         jsonb,
   last_event_seq       bigint NOT NULL DEFAULT 0, -- replay cursor; rebuildable
   created_at           timestamptz NOT NULL,
   deleted_at           timestamptz,

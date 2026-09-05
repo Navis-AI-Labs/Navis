@@ -4,6 +4,8 @@ import type { StateEvent } from './events.js';
 import { kernelErrors, type KernelError } from '../errors/kernel.js';
 import { assertTransition } from '../schema/asset.js';
 import { uuidv7 } from '../schema/ids.js';
+import { causalClockSnapshotSchema, type CausalClockSnapshot } from '../schema/causal-clock.js';
+import { advanceClock, compareClocks } from './vector-clock.js';
 import type { SchemaError } from '../errors/schema.js';
 import type { AssetLifecycle } from '../schema/asset.js';
 import type { HoldStatus } from '../schema/hold.js';
@@ -73,6 +75,7 @@ export const KERNEL_EVENT_TYPES = [
   'equip.budget_exceeded',
   'return.absorbed',
   'return.rejected',
+  'return.conflict_marked',
   'effect.recorded',
   'effect.closed',
   'delivery.recorded',
@@ -292,6 +295,7 @@ export interface EquipRow {
   readonly work_id?: string;
   readonly participant_id?: string;
   readonly state_version: number;
+  readonly causal_snapshot?: CausalClockSnapshot;
   readonly status: 'active' | 'stale';
   readonly created_at: string;
 }
@@ -602,6 +606,9 @@ function applyEvent(d: MutableProjection, e: StateEvent): void {
           ? {}
           : { participant_id: data['participant_id'] as string }),
         state_version: e.state_version,
+        ...(data['causal_snapshot'] === undefined
+          ? {}
+          : { causal_snapshot: data['causal_snapshot'] as CausalClockSnapshot }),
         status: 'active',
         created_at: e.at,
       };
@@ -612,6 +619,11 @@ function applyEvent(d: MutableProjection, e: StateEvent): void {
       // Audit-only events: budget diagnostics and wholesale rejections
       // change no projection state (a rejected return's candidates and
       // effects must never enter the projection).
+      break;
+    }
+    case 'return.conflict_marked': {
+      // Audit-only: the conflict marking exists so human review can see the
+      // parallel observation; the clock never mutates projection state.
       break;
     }
     case 'return.absorbed': {
@@ -863,6 +875,7 @@ function applyEvent(d: MutableProjection, e: StateEvent): void {
     case 'equip.budget_exceeded':
     case 'return.absorbed':
     case 'return.rejected':
+    case 'return.conflict_marked':
       break;
   }
 }
@@ -1102,6 +1115,8 @@ export interface SubmitReturnCommand {
   readonly equip_id: string;
   readonly candidates?: readonly ReturnCandidateSeed[];
   readonly effects?: readonly ReturnEffectSeed[];
+  /** What the caller had observed when its work happened; absent skips causal judgment. */
+  readonly causal_context?: CausalClockSnapshot;
   readonly expected_version: number;
 }
 
@@ -1130,10 +1145,18 @@ export interface ConfirmDeliveryCommand {
 export class ProjectStateKernel {
   private readonly history = new EventHistory();
   private readonly draft: MutableProjection = emptyProjection();
+  // authoritative causal clock: one component per accepted event, keyed by
+  // registered actor; rebuilt identically by replay from authorship
+  private causalClock: CausalClockSnapshot = {};
 
   /** Read-only view of the live replay-built projection. */
   get projection(): KernelProjection {
     return this.draft;
+  }
+
+  /** Read-only view of the authoritative causal clock (spec: detect, never merge). */
+  get causal_clock(): CausalClockSnapshot {
+    return deepFreeze({ ...this.causalClock });
   }
 
   get stateVersion(): number {
@@ -1167,16 +1190,18 @@ export class ProjectStateKernel {
     return d;
   }
 
-  /**
-   * Rebuilds a kernel from a persisted event log (the storage replay
-   * path). Each event is re-validated and re-frozen through the same
-   * history applier, so a rebuilt kernel is canonical-JSON identical to
-   * the live one when the log is intact.
-   */
+  /** Storage replay path: rebuilds projection and causal clock from a log. */
   static fromEvents(events: readonly StateEvent[]): ProjectStateKernel {
     const k = new ProjectStateKernel();
     for (const e of events) {
       const frozen = k.history.append(e);
+      const actor = frozen.actor;
+      if (actor !== null && actor !== undefined) {
+        if (k.draft.participants[actor] === undefined) {
+          throw new Error(`invalid event log: actor not registered at seq ${String(frozen.seq)}`);
+        }
+        k.causalClock = advanceClock(k.causalClock, actor);
+      }
       applyEvent(k.draft, frozen);
     }
     return k;
@@ -1785,6 +1810,9 @@ export class ProjectStateKernel {
       equip_id: equipId,
       state_version: version,
       actor: cmd.actor,
+      // bootstrap: a joiner starts from the authoritative observation; the
+      // copy decouples the payload from the live clock object
+      causal_snapshot: { ...this.causalClock },
       ...(cmd.work_id === undefined ? {} : { work_id: cmd.work_id }),
       ...(cmd.participant_id === undefined ? {} : { participant_id: cmd.participant_id }),
       ...(cmd.allowed_actions === undefined ? {} : { allowed_actions: [...cmd.allowed_actions] }),
@@ -1837,6 +1865,25 @@ export class ProjectStateKernel {
       false,
     );
     if (!gate.ok) return gate;
+    // a malformed or foreign snapshot rejects before anything is appended
+    let context: CausalClockSnapshot | undefined;
+    if (cmd.causal_context !== undefined) {
+      const parsed = causalClockSnapshotSchema.safeParse(cmd.causal_context);
+      if (!parsed.success) {
+        return {
+          ok: false,
+          error: kernelErrors.causalContextInvalid('malformed snapshot'),
+        };
+      }
+      for (const key of Object.keys(parsed.data)) {
+        if (this.draft.participants[key] === undefined) {
+          return { ok: false, error: kernelErrors.causalActorUnregistered(key) };
+        }
+      }
+      context = parsed.data;
+    }
+    // Judgment happens at return time against the then-authoritative clock.
+    const verdict = context === undefined ? undefined : compareClocks(context, this.causalClock);
     const equip = this.draft.equips[cmd.equip_id];
     const current = this.stateVersion;
     if (equip?.status !== 'active' || equip.state_version !== current) {
@@ -1848,6 +1895,9 @@ export class ProjectStateKernel {
         current_state_version: current,
         candidate_count: cmd.candidates?.length ?? 0,
         effect_count: cmd.effects?.length ?? 0,
+        ...(verdict === undefined ? {} : { verdict }),
+        ...(context === undefined ? {} : { causal_context: context }),
+        ...(verdict === undefined ? {} : { authoritative_clock: { ...this.causalClock } }),
       });
       return {
         ok: false,
@@ -1865,12 +1915,26 @@ export class ProjectStateKernel {
       ...(seed.asset_ref === undefined ? {} : { asset_ref: seed.asset_ref }),
       ...(seed.description === undefined ? {} : { description: seed.description }),
     }));
+    // concurrent: absorb but mark for human review in the same transaction —
+    // the clock never resolves content
+    const conflictMarked = verdict === 'concurrent';
     this.append('return.absorbed', cmd.at, cmd.actor, {
       equip_id: cmd.equip_id,
       actor: cmd.actor,
       candidates,
       effects,
+      ...(verdict === undefined ? {} : { verdict }),
+      ...(context === undefined ? {} : { causal_context: context }),
+      ...(verdict === undefined ? {} : { authoritative_clock: { ...this.causalClock } }),
     });
+    if (conflictMarked) {
+      this.append('return.conflict_marked', cmd.at, cmd.actor, {
+        return_actor: cmd.actor,
+        verdict,
+        causal_context: context,
+        authoritative_clock: { ...this.causalClock },
+      });
+    }
     return {
       ok: true,
       value: { absorbed_candidates: candidates.length, absorbed_effects: effects.length },
@@ -2469,6 +2533,11 @@ export class ProjectStateKernel {
     data: Record<string, unknown>,
   ): StateEvent {
     if (at.trim().length === 0) throw new Error('invalid event: missing logical time');
+    // advance the actor's clock component; the null-actor registration event
+    // advances nobody (its subject joins from its own next action)
+    if (actor !== null && this.draft.participants[actor] !== undefined) {
+      this.causalClock = advanceClock(this.causalClock, actor);
+    }
     const frozen = this.history.append({
       seq: this.history.currentSeq + 1,
       type,

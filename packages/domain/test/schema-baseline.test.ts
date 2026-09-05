@@ -215,6 +215,7 @@ describe('baseline guard: field sets equal the accepted baseline', () => {
   it('Equip fields', () => {
     expect(fieldNames(equipSchema.shape)).toEqual([
       'allowed_actions',
+      'causal_snapshot',
       'id',
       'participant_id',
       'schema_snapshot_version',

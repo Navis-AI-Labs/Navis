@@ -32,6 +32,8 @@ export const kernelErrorTokens = {
   'unknown-effect-unclosed': 'kernel/unknown-effect-unclosed',
   'project-not-active': 'kernel/project-not-active',
   'open-attempt-exists': 'kernel/open-attempt-exists',
+  'causal-context-invalid': 'kernel/causal-context-invalid',
+  'causal-actor-unregistered': 'kernel/causal-actor-unregistered',
 } as const;
 
 export type KernelErrorToken = keyof typeof kernelErrorTokens;
@@ -66,4 +68,8 @@ export const kernelErrors = {
       target_ref: targetRef,
       open_attempt_no: attemptNo,
     }),
+  causalContextInvalid: (reason: string): KernelError =>
+    kernelError('causal-context-invalid', { reason }),
+  causalActorUnregistered: (participantId: string): KernelError =>
+    kernelError('causal-actor-unregistered', { participant_id: participantId }),
 } as const;
