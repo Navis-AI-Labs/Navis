@@ -7,13 +7,25 @@ import { uuidv7 } from '../schema/ids.js';
 import type { SchemaError } from '../errors/schema.js';
 import type { AssetLifecycle } from '../schema/asset.js';
 import type { HoldStatus } from '../schema/hold.js';
+import type { WorkRunStatus } from '../schema/workrun.js';
+import { assertWorkRunTransition } from '../schema/workrun.js';
+import {
+  checkCloseAuthority,
+  checkTakeoverOpening,
+  checkTerminalConsent,
+  initialConsent,
+  strongestActiveMode,
+  type RunSessionRow,
+} from './intervention.js';
 
 /**
  * Project state kernel — the trust engine over one project aggregate.
  * It owns: the append-only event history, the replay-built projection,
- * optimistic concurrency, the human-only
- * boundary/status gates, the hold confirmation chain, the equip/return
- * contract, the effect ledger, and the per-asset delivery gate.
+ * optimistic concurrency, the human-only boundary/status gates, the hold
+ * confirmation chain, the equip/return contract, the effect ledger, the
+ * per-asset delivery gate, the workrun transition machine, the
+ * intervention session ledger (delegated to `state/intervention.ts`),
+ * and the intended-direction records.
  *
  * The kernel never reads a clock: every command carries the caller's
  * logical `at`. All rejections return Result objects whose errors carry
@@ -65,6 +77,12 @@ export const KERNEL_EVENT_TYPES = [
   'effect.closed',
   'delivery.recorded',
   'delivery.confirmed',
+  'direction.proposed',
+  'direction.resolved',
+  'workrun.started',
+  'workrun.transitioned',
+  'intervention.session_opened',
+  'intervention.session_closed',
 ] as const;
 
 export type KernelEventType = (typeof KERNEL_EVENT_TYPES)[number];
@@ -85,7 +103,7 @@ const STATE_MATERIAL_EVENTS: ReadonlySet<string> = new Set([
   'project.status_changed',
 ]);
 
-/** Hold event type per target status — the event vocabulary IS the transition. */
+/** Hold event type keyed by target status: the emitted event is the transition. */
 const HOLD_EVENT_TYPE: Readonly<Record<HoldStatus, KernelEventType>> = Object.freeze({
   registered: 'hold.registered',
   active: 'hold.activated',
@@ -263,8 +281,11 @@ export interface EffectRow {
 
 /**
  * Issuance registry row for one equip — identity, version binding, and
- * staleness only. The equip's fact payload is derived at request time and
- * never stored as business data (spec: the Equip is a derived projection).
+ * staleness only. `created_at` is the issuance event's logical time (read
+ * cache derived from the event envelope), which the release re-equip gate
+ * uses as the freshness anchor. The equip's fact payload is derived at
+ * request time and never stored as business data (spec: the Equip is a
+ * derived projection).
  */
 export interface EquipRow {
   readonly id: string;
@@ -272,6 +293,55 @@ export interface EquipRow {
   readonly participant_id?: string;
   readonly state_version: number;
   readonly status: 'active' | 'stale';
+  readonly created_at: string;
+}
+
+export type { RunSessionRow } from './intervention.js';
+
+export interface WorkRunRow {
+  readonly id: string;
+  readonly work_id: string;
+  readonly parent_run_id?: string;
+  readonly status:
+    | 'ready'
+    | 'running'
+    | 'waiting_input'
+    | 'waiting_approval'
+    | 'paused'
+    | 'cancelling'
+    | 'cancelled'
+    | 'failed'
+    | 'completed';
+  readonly run_revision: number; // per-run optimistic-concurrency counter, distinct from state_version
+  readonly re_equip_required?: boolean; // armed by a takeover release; cleared by the first successful resuming transition
+  readonly intervention_mode?: 'observe' | 'assist' | 'takeover'; // derived: strongest active session mode
+  readonly intervention_sessions: readonly RunSessionRow[]; // full session ledger in append order, active and closed alike
+  readonly checkpoint_id?: string; // latest pause anchor; updated on resume
+  readonly input_state_version?: number; // project state version the run started from
+  readonly attempt?: number; // resumption attempt counter along the parent chain
+  readonly execution_refs?: Readonly<Record<string, string>>;
+  readonly created_at: string;
+  readonly updated_at?: string;
+  readonly updated_by?: string | null;
+  readonly deleted_at?: string;
+}
+
+/** Projection row for one direction; resolution fields are replay-written at the single terminal event. */
+export interface IntendedDirectionRow {
+  readonly id: string;
+  readonly project_id: string;
+  readonly title: string;
+  readonly detail?: string;
+  readonly status: 'proposed' | 'confirmed' | 'discarded';
+  readonly proposed_by: string;
+  readonly proposed_at: string;
+  readonly resolved_by?: string; // set together with resolved_at and resolution_reason by direction.resolved
+  readonly resolved_at?: string;
+  readonly resolution_reason?: string; // mandatory human rationale at the terminal resolution
+  readonly created_at: string;
+  readonly updated_at?: string;
+  readonly updated_by?: string | null;
+  readonly deleted_at?: string;
 }
 
 export interface KernelProjection {
@@ -285,6 +355,8 @@ export interface KernelProjection {
   readonly deliveries: Readonly<Record<string, DeliveryRow>>;
   readonly effects: Readonly<Record<string, EffectRow>>;
   readonly equips: Readonly<Record<string, EquipRow>>;
+  readonly work_runs: Readonly<Record<string, WorkRunRow>>;
+  readonly intended_directions: Readonly<Record<string, IntendedDirectionRow>>;
 }
 
 /** The derived equip handed to the caller at issuance — never persisted as business data. */
@@ -293,14 +365,14 @@ export interface IssuedEquip {
   readonly work_id?: string;
   readonly participant_id?: string;
   readonly state_version: number;
+  readonly status: 'active';
+  readonly issued_at: string;
   readonly verified_facts: readonly string[];
   readonly active_assets: readonly string[];
   readonly active_holds: readonly string[];
   readonly boundary?: string;
   readonly acceptance_criteria?: readonly string[];
   readonly allowed_actions?: readonly string[];
-  readonly issued_at: string;
-  readonly status: 'active';
 }
 
 export type KernelResult<T> =
@@ -324,6 +396,8 @@ interface MutableProjection {
   deliveries: Record<string, Draft<DeliveryRow>>;
   effects: Record<string, Draft<EffectRow>>;
   equips: Record<string, Draft<EquipRow>>;
+  work_runs: Record<string, Draft<WorkRunRow>>;
+  intended_directions: Record<string, Draft<IntendedDirectionRow>>;
 }
 
 const emptyProjection = (): MutableProjection => ({
@@ -337,6 +411,8 @@ const emptyProjection = (): MutableProjection => ({
   deliveries: {},
   effects: {},
   equips: {},
+  work_runs: {},
+  intended_directions: {},
 });
 
 /** Tombstone read-side: every lookup and gate evaluation excludes deleted rows. */
@@ -527,6 +603,7 @@ function applyEvent(d: MutableProjection, e: StateEvent): void {
           : { participant_id: data['participant_id'] as string }),
         state_version: e.state_version,
         status: 'active',
+        created_at: e.at,
       };
       break;
     }
@@ -607,6 +684,116 @@ function applyEvent(d: MutableProjection, e: StateEvent): void {
       dl.confirmed_at = e.at;
       break;
     }
+    case 'direction.proposed': {
+      d.intended_directions[data['direction_id'] as string] = {
+        id: data['direction_id'] as string,
+        project_id: must(d.project, 'project').id,
+        title: data['title'] as string,
+        ...(data['detail'] === undefined ? {} : { detail: data['detail'] as string }),
+        status: 'proposed',
+        proposed_by: e.actor ?? '',
+        proposed_at: e.at,
+        created_at: e.at,
+      };
+      break;
+    }
+    case 'direction.resolved': {
+      const dir = must(d.intended_directions[data['direction_id'] as string], 'direction');
+      dir.status = data['resolution'] as IntendedDirectionRow['status'];
+      if (e.actor !== null && e.actor !== undefined) dir.resolved_by = e.actor;
+      dir.resolved_at = e.at;
+      dir.resolution_reason = data['resolution_reason'] as string;
+      break;
+    }
+    case 'workrun.started': {
+      d.work_runs[data['run_id'] as string] = {
+        id: data['run_id'] as string,
+        work_id: data['work_id'] as string,
+        ...(data['parent_run_id'] === undefined
+          ? {}
+          : { parent_run_id: data['parent_run_id'] as string }),
+        status: 'running',
+        run_revision: 1,
+        ...(data['attempt'] === undefined ? {} : { attempt: data['attempt'] as number }),
+        ...(data['execution_refs'] === undefined
+          ? {}
+          : { execution_refs: data['execution_refs'] as Record<string, string> }),
+        input_state_version: e.state_version,
+        intervention_sessions: [],
+        created_at: e.at,
+      };
+      break;
+    }
+    case 'workrun.transitioned': {
+      const run = must(d.work_runs[data['run_id'] as string], 'work run');
+      run.status = data['to'] as WorkRunRow['status'];
+      run.run_revision = data['run_revision'] as number;
+      const cp = data['checkpoint'] as Record<string, unknown> | undefined;
+      if (cp !== undefined) {
+        d.checkpoints[cp['id'] as string] = {
+          id: cp['id'] as string,
+          work_id: run.work_id,
+          ...(cp['run_id'] === undefined ? {} : { run_id: cp['run_id'] as string }),
+          ...(cp['reason'] === undefined ? {} : { reason: cp['reason'] as string }),
+          captured_at: e.at,
+          state_version: e.state_version,
+          ...(cp['position'] === undefined
+            ? {}
+            : { position: cp['position'] as Record<string, unknown> }),
+        };
+        run.checkpoint_id = cp['id'] as string;
+      }
+      const resume = data['resume_checkpoint_id'] as string | undefined;
+      if (resume !== undefined) run.checkpoint_id = resume;
+      // the first successful resuming transition clears the release flag
+      if (run.re_equip_required === true && data['resume'] === true) {
+        run.re_equip_required = false;
+      }
+      break;
+    }
+    case 'intervention.session_opened': {
+      const run = must(d.work_runs[data['run_id'] as string], 'work run');
+      const session: Draft<RunSessionRow> = {
+        session_id: data['session_id'] as string,
+        participant_id: e.actor ?? (data['participant_id'] as string),
+        mode: data['mode'] as RunSessionRow['mode'],
+        started_at: e.at,
+        ...(data['consent_status'] === undefined
+          ? {}
+          : {
+              consent_status: data['consent_status'] as Exclude<
+                RunSessionRow['consent_status'],
+                undefined
+              >,
+            }),
+      };
+      run.intervention_sessions = [...run.intervention_sessions, session];
+      run.run_revision = data['run_revision'] as number;
+      // a just-opened session is active, so a strongest mode always exists
+      const top = strongestActiveMode(run.intervention_sessions);
+      if (top !== undefined) run.intervention_mode = top;
+      break;
+    }
+    case 'intervention.session_closed': {
+      const run = must(d.work_runs[data['run_id'] as string], 'work run');
+      run.intervention_sessions = run.intervention_sessions.map((x) => {
+        if (x.session_id !== data['session_id']) return x;
+        const consent = data['consent_status'] as RunSessionRow['consent_status'];
+        return {
+          ...x,
+          ended_at: e.at,
+          ...(consent === undefined ? {} : { consent_status: consent }),
+        };
+      });
+      // re-derive the strongest active mode: releasing a takeover must fall
+      // back to the strongest remaining session, not keep a stale label
+      const top = strongestActiveMode(run.intervention_sessions);
+      if (top === undefined) delete run.intervention_mode;
+      else run.intervention_mode = top;
+      run.run_revision = data['run_revision'] as number;
+      if (data['was_takeover'] === true) run.re_equip_required = true;
+      break;
+    }
     default:
       throw new Error(`invalid event: unknown event type ${e.type}`);
   }
@@ -656,6 +843,16 @@ function applyEvent(d: MutableProjection, e: StateEvent): void {
     case 'delivery.confirmed':
       touch(d.deliveries[data['delivery_id'] as string]);
       break;
+    case 'workrun.started':
+    case 'workrun.transitioned':
+    case 'intervention.session_opened':
+    case 'intervention.session_closed':
+      touch(d.work_runs[data['run_id'] as string]);
+      break;
+    case 'direction.proposed':
+    case 'direction.resolved':
+      touch(d.intended_directions[data['direction_id'] as string]);
+      break;
     case 'participant.registered':
     case 'project.created':
     case 'project.boundary_updated':
@@ -679,6 +876,71 @@ export interface RegisterParticipantCommand {
   readonly type: 'human' | 'agent';
   readonly display_name?: string;
   readonly at: string;
+}
+
+export interface ProposeDirectionCommand {
+  readonly actor: string;
+  readonly at: string;
+  readonly direction_id: string;
+  readonly title: string;
+  readonly detail?: string;
+}
+
+export interface ResolveDirectionCommand {
+  readonly actor: string;
+  readonly at: string;
+  readonly direction_id: string;
+  readonly resolution: 'confirmed' | 'discarded';
+  readonly resolution_reason: string;
+  readonly expected_version: number;
+}
+
+export interface StartRunCommand {
+  readonly actor: string;
+  readonly at: string;
+  readonly run_id: string;
+  readonly work_id: string;
+  readonly equip_id: string;
+  readonly parent_run_id?: string;
+  readonly execution_refs?: Readonly<Record<string, string>>;
+  readonly expected_version: number;
+}
+
+export interface TransitionRunCommand {
+  readonly actor: string;
+  readonly at: string;
+  readonly run_id: string;
+  readonly to: WorkRunStatus;
+  readonly reason: string;
+  readonly expected_version: number;
+  readonly run_revision: number;
+  readonly equip_id?: string;
+  readonly input_provided?: string;
+  readonly approval_result?: string;
+  readonly resume_checkpoint_id?: string;
+  readonly checkpoint_reason?: string;
+  readonly checkpoint_position?: Readonly<Record<string, unknown>>;
+  readonly checkpoint_resume_ref?: Readonly<Record<string, string>>;
+}
+
+export interface OpenInterventionCommand {
+  readonly actor: string;
+  readonly at: string;
+  readonly run_id: string;
+  readonly session_id: string;
+  readonly mode: 'observe' | 'assist' | 'takeover';
+  readonly expected_version: number;
+  readonly run_revision: number;
+}
+
+export interface CloseInterventionCommand {
+  readonly actor: string;
+  readonly at: string;
+  readonly run_id: string;
+  readonly session_id: string;
+  readonly consent_status?: 'granted' | 'denied';
+  readonly expected_version: number;
+  readonly run_revision: number;
 }
 
 export interface CreateProjectCommand {
@@ -1038,7 +1300,7 @@ export class ProjectStateKernel {
       }
     }
     if (cmd.to === 'archived') {
-      // Closure cascade FIRST, each closure event carrying the cause; the
+      // Closure cascade runs first, each closure event carrying the cause; the
       // status change lands last and is the State-material version bump.
       const cause = `project archive: ${cmd.reason}`;
       for (const w of Object.values(this.draft.works)) {
@@ -1786,6 +2048,16 @@ export class ProjectStateKernel {
     return { ok: true, value: undefined };
   }
 
+  private requireKnownActor(
+    action: string,
+    actor: string,
+  ): { readonly ok: false; readonly error: KernelError } | undefined {
+    if (this.draft.participants[actor] === undefined) {
+      return { ok: false, error: kernelErrors.forbidden(action, { reason: 'unknown-actor' }) };
+    }
+    return undefined;
+  }
+
   private requireHuman(action: string, actor: string): KernelResult<void> {
     if (this.draft.participants[actor]?.type !== 'human') {
       return {
@@ -1808,6 +2080,379 @@ export class ProjectStateKernel {
     // NaN propagates by design: every grace/purge comparison is written so
     // that NaN fails the threshold the same way an unelapsed window does.
     return Math.floor((Date.parse(toIso) - Date.parse(fromIso)) / 86_400_000);
+  }
+
+  // -- intended direction ---------------------------------------------------
+
+  /**
+   * Direction records are the project's third time plane. Proposing is
+   * open to every participant on a non-terminal project; resolution is
+   * human-only, reason-carrying, and terminal. Direction events are not
+   * State-material: they repeat the current state version.
+   */
+  proposeDirection(cmd: ProposeDirectionCommand): KernelResult<IntendedDirectionRow> {
+    const actorGuard = this.requireKnownActor('propose_direction', cmd.actor);
+    if (actorGuard !== undefined) return actorGuard;
+    if (this.draft.project === null) {
+      return {
+        ok: false,
+        error: kernelErrors.forbidden('propose_direction', { reason: 'no-project' }),
+      };
+    }
+    const p = this.draft.project;
+    if (p.status === 'completed' || p.status === 'archived') {
+      return { ok: false, error: kernelErrors.projectNotActive(p.status, 'propose_direction') };
+    }
+    if (this.draft.intended_directions[cmd.direction_id] !== undefined) {
+      return {
+        ok: false,
+        error: kernelErrors.forbidden('propose_direction', { reason: 'direction-exists' }),
+      };
+    }
+    const title = cmd.title.trim();
+    if (title.length === 0 || title.length > 256) {
+      return {
+        ok: false,
+        error: kernelErrors.forbidden('propose_direction', { reason: 'title-length' }),
+      };
+    }
+    this.append('direction.proposed', cmd.at, cmd.actor, {
+      direction_id: cmd.direction_id,
+      title,
+      ...(cmd.detail === undefined ? {} : { detail: cmd.detail }),
+    });
+    return {
+      ok: true,
+      value: this.draft.intended_directions[cmd.direction_id] as IntendedDirectionRow,
+    };
+  }
+
+  resolveDirection(cmd: ResolveDirectionCommand): KernelResult<IntendedDirectionRow> {
+    // requireHuman doubles as the known-actor guard: only a registered
+    // participant can carry type 'human', so agents and ghosts both fail it.
+    const humanGuard = this.requireHuman('resolve_direction', cmd.actor);
+    if (!humanGuard.ok) return humanGuard;
+    const dir = this.draft.intended_directions[cmd.direction_id];
+    if (dir === undefined || dir.deleted_at !== undefined) {
+      return {
+        ok: false,
+        error: kernelErrors.forbidden('resolve_direction', { reason: 'direction-not-found' }),
+      };
+    }
+    if (dir.status !== 'proposed') {
+      return {
+        ok: false,
+        error: kernelErrors.forbidden('resolve_direction', { reason: 'already-resolved' }),
+      };
+    }
+    if (cmd.resolution_reason.trim().length === 0) {
+      return { ok: false, error: kernelErrors.rationaleRequired('resolve_direction') };
+    }
+    if (this.draft.project?.current_state_version !== cmd.expected_version) {
+      return {
+        ok: false,
+        error: kernelErrors.versionConflict(
+          cmd.expected_version,
+          this.draft.project?.current_state_version ?? 0,
+        ),
+      };
+    }
+    this.append('direction.resolved', cmd.at, cmd.actor, {
+      direction_id: cmd.direction_id,
+      resolution: cmd.resolution,
+      resolution_reason: cmd.resolution_reason,
+    });
+    return {
+      ok: true,
+      value: this.draft.intended_directions[cmd.direction_id] as IntendedDirectionRow,
+    };
+  }
+
+  // -- workrun execution ----------------------------------------------------
+
+  private requireRun(
+    runId: string,
+    action: string,
+  ): { readonly run: WorkRunRow } | { readonly ok: false; readonly error: KernelError } {
+    const run = this.draft.work_runs[runId];
+    if (run === undefined || run.deleted_at !== undefined) {
+      return {
+        ok: false,
+        error: kernelErrors.forbidden(action, { reason: 'run-not-found' }),
+      };
+    }
+    return { run };
+  }
+
+  /**
+   * The fresh-equip gate: while the release flag is set, every run-resuming
+   * command must present an equip issued at the current state version to the
+   * acting participant AFTER the takeover release. The pre-takeover equip is
+   * still active and version-current, so the issuance timestamp is the only
+   * distinguisher; continuing on it is rejected as stale.
+   */
+  private checkReEquipGate(
+    action: 'transition_run',
+    run: WorkRunRow,
+    cmd: { readonly equip_id?: string; readonly actor: string },
+  ): KernelResult<void> {
+    if (run.re_equip_required !== true) return { ok: true, value: undefined };
+    if (cmd.equip_id === undefined) {
+      return { ok: false, error: kernelErrors.forbidden(action, { reason: 're-equip-required' }) };
+    }
+    const equip = this.draft.equips[cmd.equip_id];
+    if (
+      equip?.status !== 'active' ||
+      equip.state_version !== this.draft.project?.current_state_version
+    ) {
+      return { ok: false, error: kernelErrors.forbidden(action, { reason: 'stale-equip' }) };
+    }
+    if (equip.participant_id !== cmd.actor) {
+      return { ok: false, error: kernelErrors.forbidden(action, { reason: 'foreign-equip' }) };
+    }
+    // the freshness anchor is the most recent release: sessions are appended
+    // in event order, so the last closed takeover session is the active one
+    const closedTakeovers = run.intervention_sessions.filter(
+      (x) => x.mode === 'takeover' && x.ended_at !== undefined,
+    );
+    const releasedAt = closedTakeovers[closedTakeovers.length - 1]?.ended_at;
+    if (releasedAt !== undefined && Date.parse(equip.created_at) <= Date.parse(releasedAt)) {
+      return { ok: false, error: kernelErrors.forbidden(action, { reason: 'stale-equip' }) };
+    }
+    return { ok: true, value: undefined };
+  }
+
+  startRun(cmd: StartRunCommand): KernelResult<WorkRunRow> {
+    const actorGuard = this.requireKnownActor('start_run', cmd.actor);
+    if (actorGuard !== undefined) return actorGuard;
+    const project = this.draft.project;
+    if (project?.status !== 'active') {
+      return {
+        ok: false,
+        error: kernelErrors.projectNotActive(project?.status ?? 'archived', 'start_run'),
+      };
+    }
+    if (this.draft.works[cmd.work_id] === undefined) {
+      return {
+        ok: false,
+        error: kernelErrors.forbidden('start_run', { reason: 'work-not-found' }),
+      };
+    }
+    if (this.draft.work_runs[cmd.run_id] !== undefined) {
+      return { ok: false, error: kernelErrors.forbidden('start_run', { reason: 'run-exists' }) };
+    }
+    const equip = this.draft.equips[cmd.equip_id];
+    if (equip?.status !== 'active' || equip.state_version !== project.current_state_version) {
+      return { ok: false, error: kernelErrors.forbidden('start_run', { reason: 'stale-equip' }) };
+    }
+    if (equip.participant_id !== cmd.actor) {
+      return { ok: false, error: kernelErrors.forbidden('start_run', { reason: 'foreign-equip' }) };
+    }
+    let attempt = 1;
+    if (cmd.parent_run_id !== undefined) {
+      const parent = this.draft.work_runs[cmd.parent_run_id];
+      if (parent?.work_id !== cmd.work_id) {
+        return {
+          ok: false,
+          error: kernelErrors.forbidden('start_run', { reason: 'parent-run-invalid' }),
+        };
+      }
+      if (parent.status !== 'cancelled' && parent.status !== 'failed') {
+        return {
+          ok: false,
+          error: kernelErrors.forbidden('start_run', { reason: 'parent-run-not-terminal' }),
+        };
+      }
+      attempt = (parent.attempt ?? 1) + 1;
+    }
+    this.append('workrun.started', cmd.at, cmd.actor, {
+      run_id: cmd.run_id,
+      work_id: cmd.work_id,
+      ...(cmd.parent_run_id === undefined ? {} : { parent_run_id: cmd.parent_run_id }),
+      attempt,
+      ...(cmd.execution_refs === undefined ? {} : { execution_refs: cmd.execution_refs }),
+    });
+    return { ok: true, value: this.draft.work_runs[cmd.run_id] as WorkRunRow };
+  }
+
+  transitionRun(cmd: TransitionRunCommand): KernelResult<WorkRunRow> {
+    const fetched = this.requireRun(cmd.run_id, 'transition_run');
+    if ('ok' in fetched) return fetched;
+    const run = fetched.run;
+    const transition = assertWorkRunTransition(run.status, cmd.to);
+    if (!transition.ok) return { ok: false, error: transition.error };
+    if (run.run_revision !== cmd.run_revision) {
+      return { ok: false, error: kernelErrors.versionConflict(cmd.run_revision, run.run_revision) };
+    }
+    if (this.draft.project?.current_state_version !== cmd.expected_version) {
+      return {
+        ok: false,
+        error: kernelErrors.versionConflict(
+          cmd.expected_version,
+          this.draft.project?.current_state_version ?? 0,
+        ),
+      };
+    }
+    if (cmd.reason.trim().length === 0) {
+      return { ok: false, error: kernelErrors.rationaleRequired('transition_run') };
+    }
+    const resuming =
+      (run.status === 'waiting_input' && cmd.to === 'running') ||
+      (run.status === 'waiting_approval' && cmd.to === 'running') ||
+      (run.status === 'paused' && cmd.to === 'running');
+    if (resuming) {
+      const gate = this.checkReEquipGate('transition_run', run, cmd);
+      if (!gate.ok) return gate;
+    }
+    if (
+      run.status === 'waiting_input' &&
+      cmd.to === 'running' &&
+      cmd.input_provided === undefined
+    ) {
+      return {
+        ok: false,
+        error: kernelErrors.forbidden('transition_run', { reason: 'input-evidence-required' }),
+      };
+    }
+    if (run.status === 'waiting_approval' && cmd.to === 'running') {
+      if (cmd.approval_result === undefined) {
+        return {
+          ok: false,
+          error: kernelErrors.forbidden('transition_run', { reason: 'approval-evidence-required' }),
+        };
+      }
+      const humanGuard = this.requireHuman('transition_run', cmd.actor);
+      if (!humanGuard.ok) return humanGuard;
+    }
+    if (run.status === 'paused' && cmd.to === 'running') {
+      // the reference must name this run's own last recorded checkpoint; any
+      // other id (another run's, or an older one of this run) is a mismatch
+      if (cmd.resume_checkpoint_id === undefined) {
+        return {
+          ok: false,
+          error: kernelErrors.forbidden('transition_run', { reason: 'resume-checkpoint-required' }),
+        };
+      }
+      if (cmd.resume_checkpoint_id !== run.checkpoint_id) {
+        return {
+          ok: false,
+          error: kernelErrors.forbidden('transition_run', { reason: 'resume-checkpoint-mismatch' }),
+        };
+      }
+    }
+    const checkpointPayload: Record<string, unknown> | undefined =
+      cmd.to === 'paused'
+        ? {
+            id: `chk_${cmd.run_id}_${String(cmd.run_revision + 1)}`,
+            run_id: cmd.run_id,
+            ...(cmd.checkpoint_reason === undefined ? {} : { reason: cmd.checkpoint_reason }),
+            ...(cmd.checkpoint_position === undefined ? {} : { position: cmd.checkpoint_position }),
+          }
+        : undefined;
+    const data: Record<string, unknown> = {
+      run_id: cmd.run_id,
+      from: run.status,
+      to: cmd.to,
+      reason: cmd.reason,
+      run_revision: run.run_revision + 1,
+      resume: resuming,
+      ...(cmd.input_provided === undefined ? {} : { input_provided: cmd.input_provided }),
+      ...(cmd.approval_result === undefined ? {} : { approval_result: cmd.approval_result }),
+      ...(cmd.resume_checkpoint_id === undefined
+        ? {}
+        : { resume_checkpoint_id: cmd.resume_checkpoint_id }),
+      ...(checkpointPayload === undefined ? {} : { checkpoint: checkpointPayload }),
+    };
+    this.append('workrun.transitioned', cmd.at, cmd.actor, data);
+    return { ok: true, value: this.draft.work_runs[cmd.run_id] as WorkRunRow };
+  }
+
+  openIntervention(cmd: OpenInterventionCommand): KernelResult<WorkRunRow> {
+    const fetched = this.requireRun(cmd.run_id, 'open_intervention');
+    if ('ok' in fetched) return fetched;
+    const run = fetched.run;
+    const actorGuard = this.requireKnownActor('open_intervention', cmd.actor);
+    if (actorGuard !== undefined) return actorGuard;
+    if (run.run_revision !== cmd.run_revision) {
+      return { ok: false, error: kernelErrors.versionConflict(cmd.run_revision, run.run_revision) };
+    }
+    if (this.draft.project?.current_state_version !== cmd.expected_version) {
+      return {
+        ok: false,
+        error: kernelErrors.versionConflict(
+          cmd.expected_version,
+          this.draft.project?.current_state_version ?? 0,
+        ),
+      };
+    }
+    if (cmd.mode === 'takeover') {
+      const opening = checkTakeoverOpening(run.intervention_sessions, cmd.actor);
+      if (!opening.ok) {
+        return {
+          ok: false,
+          error: kernelErrors.forbidden('open_intervention', { reason: opening.reason }),
+        };
+      }
+    }
+    const consent = initialConsent(cmd.mode);
+    this.append('intervention.session_opened', cmd.at, cmd.actor, {
+      run_id: cmd.run_id,
+      session_id: cmd.session_id,
+      mode: cmd.mode,
+      run_revision: run.run_revision + 1,
+      ...(consent === undefined ? {} : { consent_status: consent }),
+    });
+    return { ok: true, value: this.draft.work_runs[cmd.run_id] as WorkRunRow };
+  }
+
+  closeIntervention(cmd: CloseInterventionCommand): KernelResult<WorkRunRow> {
+    const fetched = this.requireRun(cmd.run_id, 'close_intervention');
+    if ('ok' in fetched) return fetched;
+    const run = fetched.run;
+    const actorGuard = this.requireKnownActor('close_intervention', cmd.actor);
+    if (actorGuard !== undefined) return actorGuard;
+    if (run.run_revision !== cmd.run_revision) {
+      return { ok: false, error: kernelErrors.versionConflict(cmd.run_revision, run.run_revision) };
+    }
+    if (this.draft.project?.current_state_version !== cmd.expected_version) {
+      return {
+        ok: false,
+        error: kernelErrors.versionConflict(
+          cmd.expected_version,
+          this.draft.project?.current_state_version ?? 0,
+        ),
+      };
+    }
+    const session = run.intervention_sessions.find((x) => x.session_id === cmd.session_id);
+    if (session === undefined || session.ended_at !== undefined) {
+      return {
+        ok: false,
+        error: kernelErrors.forbidden('close_intervention', { reason: 'session-not-found' }),
+      };
+    }
+    const actorType = this.draft.participants[cmd.actor]?.type;
+    const authority = checkCloseAuthority(session, cmd.actor, actorType === 'human');
+    if (!authority.ok) {
+      return {
+        ok: false,
+        error: kernelErrors.forbidden('close_intervention', { reason: authority.reason }),
+      };
+    }
+    const consent = checkTerminalConsent(session.mode, cmd.consent_status);
+    if (!consent.ok) {
+      return {
+        ok: false,
+        error: kernelErrors.forbidden('close_intervention', { reason: consent.reason }),
+      };
+    }
+    this.append('intervention.session_closed', cmd.at, cmd.actor, {
+      run_id: cmd.run_id,
+      session_id: cmd.session_id,
+      was_takeover: session.mode === 'takeover',
+      run_revision: run.run_revision + 1,
+      ...(consent.consent === undefined ? {} : { consent_status: consent.consent }),
+    });
+    return { ok: true, value: this.draft.work_runs[cmd.run_id] as WorkRunRow };
   }
 
   /**

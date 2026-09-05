@@ -59,6 +59,13 @@ export {
   type HoldStatus,
 } from './hold.js';
 
+export {
+  intendedDirectionSchema,
+  intendedDirectionStatusSchema,
+  type IntendedDirection,
+  type IntendedDirectionStatus,
+} from './intended-direction.js';
+
 export { uuidSchema, uuidv7, uuidv7Schema, uuidv7Timestamp } from './ids.js';
 
 export {

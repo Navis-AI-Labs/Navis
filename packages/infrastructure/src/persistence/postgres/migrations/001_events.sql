@@ -126,7 +126,10 @@ CREATE TABLE IF NOT EXISTS effect_ledger (
   causation_id  text,
   correlation_id text,
   recorded_at   timestamptz NOT NULL,
-  closed_at     timestamptz
+  closed_at     timestamptz,
+  -- replay-writable read caches, same convention as the other mutable projection tables
+  updated_at    timestamptz,
+  updated_by    uuid
 );
 
 -- Delivery-gate authority half: unclosed unknown effects block delivery.
@@ -240,11 +243,39 @@ ALTER TABLE holds ADD CONSTRAINT holds_fowler_tech_debt_only
 CREATE INDEX IF NOT EXISTS idx_holds_gate
   ON holds (project_id) WHERE status = 'active' AND blocks_delivery AND deleted_at IS NULL;
 
+-- The third time plane: what the project intends next. The CHECK pair makes
+-- resolution all-or-nothing and always reason-carrying.
+CREATE TABLE IF NOT EXISTS intended_directions (
+  id                uuid PRIMARY KEY,
+  project_id        uuid NOT NULL,
+  title             text NOT NULL CHECK (length(title) BETWEEN 1 AND 256),
+  detail            text,
+  status            text NOT NULL CHECK (status IN ('proposed','confirmed','discarded')),
+  proposed_by       uuid NOT NULL,
+  proposed_at       timestamptz NOT NULL,
+  resolved_by       uuid,
+  resolved_at       timestamptz,
+  resolution_reason text CHECK (resolution_reason IS NULL OR length(resolution_reason) BETWEEN 1 AND 4096),
+  created_at        timestamptz NOT NULL,
+  -- replay-writable read caches, same convention as the other mutable projection tables
+  updated_at        timestamptz,
+  updated_by        uuid,
+  deleted_at        timestamptz,
+  CHECK (deleted_at IS NULL OR deleted_at >= created_at),
+  CHECK ((resolved_by IS NULL) = (resolved_at IS NULL)),
+  CHECK ((status = 'proposed') OR (resolved_by IS NOT NULL AND resolution_reason IS NOT NULL))
+);
+
+-- Run execution rows: run_revision is the per-run optimistic-concurrency
+-- counter (distinct from state_version); the release flag arms the
+-- fresh-equip resumption gate.
 CREATE TABLE IF NOT EXISTS work_runs (
   id                  uuid PRIMARY KEY,
   work_id             uuid NOT NULL,
   parent_run_id       uuid,
   status              text NOT NULL CHECK (status IN ('ready','running','waiting_input','waiting_approval','paused','cancelling','cancelled','failed','completed')),
+  run_revision        bigint NOT NULL DEFAULT 0 CHECK (run_revision >= 0),
+  re_equip_required   boolean NOT NULL DEFAULT false,
   intervention_mode   text CHECK (intervention_mode IN ('observe','assist','takeover')),
   checkpoint_id       uuid,
   input_state_version bigint,
@@ -257,11 +288,13 @@ CREATE TABLE IF NOT EXISTS work_runs (
   updated_by          uuid
 );
 
+-- Pause checkpoints: a resume anchors the run at a recorded state version.
 CREATE TABLE IF NOT EXISTS checkpoints (
   id            uuid PRIMARY KEY,
   work_id       uuid NOT NULL,
+  run_id        uuid, -- set when the checkpoint anchors a work run (pause/resume)
   reason        text,
-  captured_at   timestamptz NOT NULL, -- when the breakpoint was captured
+  captured_at   timestamptz NOT NULL, -- logical time the checkpoint was captured
   state_version bigint NOT NULL CHECK (state_version >= 0),
   position      jsonb,
   resume_ref    jsonb

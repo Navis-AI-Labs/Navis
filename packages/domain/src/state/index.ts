@@ -9,3 +9,12 @@ export {
   ProjectStateKernel,
 } from './project-state-kernel.js';
 export type { KernelEventType } from './project-state-kernel.js';
+export {
+  activeSessions,
+  checkCloseAuthority,
+  checkTakeoverOpening,
+  checkTerminalConsent,
+  initialConsent,
+  strongestActiveMode,
+} from './intervention.js';
+export type { RunSessionRow } from './intervention.js';

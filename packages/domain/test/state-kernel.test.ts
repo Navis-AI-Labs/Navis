@@ -149,6 +149,21 @@ describe('kernel: append-only history + optimistic concurrency', () => {
     const head = k.events[k.events.length - 1];
     expect(Object.isFrozen(head)).toBe(true);
   });
+
+  it('the new aggregates (work_runs, intended_directions) have no update/delete methods either', () => {
+    const surface = Object.getOwnPropertyNames(ProjectStateKernel.prototype);
+    // Only the six command names touch the new aggregates; every one of
+    // them is an append-path command, and nothing offers row edit/removal.
+    const aggregateCommands = surface.filter((m) =>
+      /^(startRun|transitionRun|openIntervention|closeIntervention|proposeDirection|resolveDirection)$/.test(
+        m,
+      ),
+    );
+    expect(aggregateCommands).toHaveLength(6);
+    expect(
+      surface.filter((m) => /updateRun|deleteRun|editDirection|removeDirection/i.test(m)),
+    ).toEqual([]);
+  });
 });
 
 describe('kernel: boundary (human-only, reason-gated, State-material)', () => {

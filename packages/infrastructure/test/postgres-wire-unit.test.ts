@@ -334,6 +334,76 @@ describe('runMigrations against a scripted wire (unit, no database)', () => {
   });
 });
 
+describe('enlarged L3 projection schema (structural guards, no database)', () => {
+  const readSql = (): string =>
+    readFileSync(
+      new URL('../src/persistence/postgres/migrations/001_events.sql', import.meta.url),
+      'utf8',
+    );
+  const tableBlock = (sqlText: string, table: string): string => {
+    const start = sqlText.indexOf(`CREATE TABLE IF NOT EXISTS ${table} `);
+    expect(start, `${table} must exist`).toBeGreaterThan(0);
+    const end = sqlText.indexOf(');', start);
+    return sqlText.slice(start, end);
+  };
+
+  it('intended_directions carries the full record shape with terminal-resolution consistency', () => {
+    const block = tableBlock(readSql(), 'intended_directions');
+    for (const column of [
+      'id',
+      'project_id',
+      'title',
+      'detail',
+      'status',
+      'proposed_by',
+      'proposed_at',
+      'resolved_by',
+      'resolved_at',
+      'resolution_reason',
+      'created_at',
+      'updated_at',
+      'updated_by',
+      'deleted_at',
+    ]) {
+      expect(block, `intended_directions must carry ${column}`).toMatch(
+        new RegExp(`^\\s*${column} `, 'm'),
+      );
+    }
+    expect(block).toMatch(/CHECK \(\(resolved_by IS NULL\) = \(resolved_at IS NULL\)\)/);
+    expect(block).toMatch(
+      /CHECK \(\(status = 'proposed'\) OR \(resolved_by IS NOT NULL AND resolution_reason IS NOT NULL\)\)/,
+    );
+    expect(block).toMatch(/CHECK \(deleted_at IS NULL OR deleted_at >= created_at\)/);
+  });
+
+  it('effect_ledger carries the replay-writable read-cache columns its projection rows write', () => {
+    const block = tableBlock(readSql(), 'effect_ledger');
+    for (const column of [
+      'effect_id',
+      'status',
+      'recorded_at',
+      'closed_at',
+      'updated_at',
+      'updated_by',
+    ]) {
+      expect(block, `effect_ledger must carry ${column}`).toMatch(
+        new RegExp(`^\\s*${column} `, 'm'),
+      );
+    }
+  });
+
+  it('work_runs carry the run revision anchor and the release re-equip flag', () => {
+    const block = tableBlock(readSql(), 'work_runs');
+    expect(block).toMatch(/run_revision\s+bigint NOT NULL DEFAULT 0 CHECK \(run_revision >= 0\)/);
+    expect(block).toMatch(/re_equip_required\s+boolean NOT NULL DEFAULT false/);
+  });
+
+  it('checkpoints carry the run reference for pause recovery anchors', () => {
+    const block = tableBlock(readSql(), 'checkpoints');
+    expect(block).toMatch(/run_id\s+uuid/);
+  });
+});
+
 describe('createConnection (unit)', () => {
   it('builds a pooled wire endpoint from DATABASE_URL alone', async () => {
     const sql = createConnection('postgres://postgres@127.0.0.1:54329/navis_test');
