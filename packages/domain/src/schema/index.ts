@@ -48,6 +48,10 @@ export {
 
 export { equipSchema, equipStatusSchema, type Equip, type EquipStatus } from './equip.js';
 
+export { interfaceDefinitions } from './capability-interfaces.js';
+
+export { linkTypeDefinitions } from './link-types.js';
+
 export {
   fowlerQuadrantSchema,
   holdKindSchema,
@@ -84,6 +88,26 @@ export { taskspaceSchema, type TaskSpace } from './taskspace.js';
 export { textSchema } from './text.js';
 
 export { instantSchema } from './time.js';
+
+export {
+  projectTemplates,
+  type ProjectTemplate,
+  type TemplateObjectType,
+  type TemplateRelation,
+} from './templates/project-templates.js';
+
+export {
+  coreObjectTypeNames,
+  type CoreObjectTypeName,
+  type InterfaceDefinition,
+  type LinkCardinality,
+  type LinkTypeConstraint,
+  type LinkTypeDefinition,
+  type ObjectTypeDescriptor,
+  type PropertyDeclaration,
+  validateVocabulary,
+  type VocabularyIssue,
+} from './vocabulary.js';
 
 export {
   interventionModeSchema,
