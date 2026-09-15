@@ -23,5 +23,10 @@ export default defineConfig({
     include: ['packages/*/test/**/*.test.ts'],
     passWithNoTests: false,
     restoreMocks: true,
+    // Seeded fuzz batteries replay hundreds of thousands of events and are
+    // CPU-bound: they finish well inside 5s locally but time out on the
+    // slower shared CI runners. One generous ceiling instead of scattering
+    // per-test timeout overrides.
+    testTimeout: 60_000,
   },
 });
