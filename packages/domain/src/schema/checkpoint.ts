@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { stateVersionSchema } from './project.js';
+
 import { textSchema } from './text.js';
 import { instantSchema } from './time.js';
 import { uuidSchema } from './ids.js';
@@ -20,7 +22,7 @@ export const checkpointSchema = z
     reason: textSchema.optional(),
     captured_at: instantSchema, // when the breakpoint was captured
     // Project State version at capture; recovery restores against this anchor
-    state_version: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    state_version: stateVersionSchema,
     position: z.record(z.string().min(1).max(128), z.unknown()).optional(),
     resume_ref: z.record(z.string().min(1).max(128), z.string().max(2048)).optional(),
   })

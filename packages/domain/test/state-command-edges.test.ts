@@ -248,7 +248,7 @@ describe('command-surface rejection edges (coverage of guard branches)', () => {
       k.startRun({
         actor: human,
         at: T(2),
-        run_id: 'r5',
+        run_id: '0198b500-0000-7000-8000-000000000005',
         work_id: workId,
         equip_id: humanEquip.value.id,
         expected_version: 0,

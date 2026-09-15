@@ -33,6 +33,11 @@ export function canonicalEquals(a: unknown, b: unknown): boolean {
   return canonicalJson(a) === canonicalJson(b);
 }
 
+/** An owned immutable value; freezing it never changes the caller's object. */
+export function immutableCopy<T>(value: T): T {
+  return deepFreeze(structuredClone(value));
+}
+
 function sortValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortValue);
   if (value !== null && typeof value === 'object') {
@@ -45,9 +50,8 @@ function sortValue(value: unknown): unknown {
 }
 
 /**
- * Deep-freezes a value in place (objects, arrays, and functions), the way
- * Object.freeze would but through every nesting level. Cycles throw — a
- * frozen event graph must be a tree, and JSON data cannot carry cycles.
+ * Deep-freezes a value in place. Shared references are allowed; cycles
+ * fail because they cannot be represented in the event JSON contract.
  */
 export function deepFreeze<T>(value: T): T {
   const seen = new Set<unknown>();
@@ -59,6 +63,7 @@ export function deepFreeze<T>(value: T): T {
     for (const key of Object.getOwnPropertyNames(node)) {
       walk((node as Record<string, unknown>)[key]);
     }
+    seen.delete(node);
   };
   walk(value);
   return value;

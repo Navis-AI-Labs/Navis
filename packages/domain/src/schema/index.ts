@@ -81,7 +81,13 @@ export {
   type ParticipantType,
 } from './participant.js';
 
-export { projectSchema, projectStatusSchema, type Project, type ProjectStatus } from './project.js';
+export {
+  projectSchema,
+  projectStatusSchema,
+  stateVersionSchema,
+  type Project,
+  type ProjectStatus,
+} from './project.js';
 
 export { taskspaceSchema, type TaskSpace } from './taskspace.js';
 

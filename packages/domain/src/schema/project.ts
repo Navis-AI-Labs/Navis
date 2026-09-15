@@ -11,6 +11,9 @@ export const projectStatusSchema = z.enum(['active', 'paused', 'completed', 'arc
   id: 'ProjectStatus',
 });
 
+/** Project State version — zero-based, bounded, the single version vocabulary */
+export const stateVersionSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+
 export const projectSchema = z
   .strictObject({
     id: uuidSchema,
@@ -25,7 +28,7 @@ export const projectSchema = z
     acceptance_criteria: z.array(textSchema).max(100).optional(),
     status: projectStatusSchema,
     // for concurrency checks and Equip invalidation; only State-material events advance it
-    current_state_version: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    current_state_version: stateVersionSchema,
   })
   .meta({
     description: 'A continuously-existing project with goals, boundary, and delivery continuity.',

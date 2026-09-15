@@ -30,6 +30,25 @@ const ALL_STATUSES: readonly WorkRunStatus[] = [
   'completed',
 ];
 
+const LEGAL_PAIRS: readonly (readonly [WorkRunStatus, WorkRunStatus])[] = [
+  ['ready', 'running'],
+  ['running', 'waiting_input'],
+  ['running', 'waiting_approval'],
+  ['running', 'paused'],
+  ['running', 'cancelling'],
+  ['running', 'completed'],
+  ['running', 'failed'],
+  ['waiting_input', 'running'],
+  ['waiting_input', 'paused'],
+  ['waiting_input', 'cancelling'],
+  ['waiting_approval', 'running'],
+  ['waiting_approval', 'paused'],
+  ['waiting_approval', 'cancelling'],
+  ['paused', 'running'],
+  ['paused', 'cancelling'],
+  ['cancelling', 'cancelled'],
+];
+
 const MATERIAL_EVENTS: ReadonlySet<string> = new Set([
   'project.boundary_updated',
   'project.status_changed',
@@ -297,12 +316,11 @@ function step(w: SimWorld, rng: () => number, at: string): void {
   checkInvariants(w, `step@${at}`);
 }
 
-function runSimulation(seed: number, steps: number, invariantEveryStep = true): SimWorld {
+function runSimulation(seed: number, steps: number): SimWorld {
   const w = newWorld();
   const rng = mulberry32(seed);
   for (let i = 0; i < steps; i += 1) {
     step(w, rng, T(i + 1));
-    if (!invariantEveryStep && i % 25 === 24) checkInvariants(w, `scale@${String(i)}`);
   }
   checkInvariants(w, `final@seed${String(seed)}`);
   return w;
@@ -315,6 +333,9 @@ describe('exhaustive transition table (81 pairs)', () => {
     for (const from of ALL_STATUSES) {
       for (const to of ALL_STATUSES) {
         const r = assertWorkRunTransition(from, to);
+        expect(r.ok, `${from} -> ${to}`).toBe(
+          LEGAL_PAIRS.some(([source, target]) => source === from && target === to),
+        );
         if (r.ok) legal += 1;
         else {
           illegal += 1;
@@ -421,49 +442,35 @@ describe('exhaustive transition table (81 pairs)', () => {
       } else {
         driveTo(from, runId);
       }
-      const before = k.events.length;
-      const revBefore = k.projection.work_runs[runId]?.run_revision ?? 0;
-      let legalSeen = 0;
+      const before = k.events;
+      const revision = k.projection.work_runs[runId]?.run_revision ?? 0;
       for (const to of ALL_STATUSES) {
-        const verdict = assertWorkRunTransition(from, to);
-        if (verdict.ok) {
-          // execute the one legal pair with full gate evidence: a legal pair
-          // can still be gate-rejected (approvals are human-only, a paused
-          // resumption needs its checkpoint) — the gates have their own
-          // suites; here we prove the pair itself passes
-          legalSeen += 1;
-          const r = k.transitionRun({
-            actor: human,
-            at: T(9),
-            run_id: runId,
-            to,
-            reason: 'probe',
-            expected_version: k.stateVersion,
-            run_revision: k.projection.work_runs[runId]?.run_revision ?? 0,
-            ...(to === 'running' ? { input_provided: 'x', approval_result: 'yes' } : {}),
-            ...(to === 'running' && from === 'paused'
-              ? { resume_checkpoint_id: k.projection.work_runs[runId]?.checkpoint_id ?? '' }
-              : {}),
-          });
-          expect(r.ok, `${from}→${to} must pass`).toBe(true);
-          break;
-        }
-        const r = k.transitionRun({
+        const attempt = ProjectStateKernel.fromEvents(before);
+        const expected = LEGAL_PAIRS.some(([source, target]) => source === from && target === to);
+        const result = attempt.transitionRun({
           actor: human,
           at: T(9),
           run_id: runId,
           to,
-          reason: 'probe',
-          expected_version: k.stateVersion,
-          run_revision: k.projection.work_runs[runId]?.run_revision ?? 0,
+          reason: 'transition check',
+          expected_version: attempt.stateVersion,
+          run_revision: revision,
+          ...(to === 'running' ? { input_provided: 'provided', approval_result: 'approved' } : {}),
+          ...(to === 'running' && from === 'paused'
+            ? { resume_checkpoint_id: attempt.projection.work_runs[runId]?.checkpoint_id ?? '' }
+            : {}),
         });
-        expect(r.ok, `${from}→${to} must be rejected`).toBe(false);
-        if (!r.ok) expect(r.error.code).toBe('illegal-transition');
-        expect(k.events.length).toBe(before);
-        expect(k.projection.work_runs[runId]?.run_revision).toBe(revBefore);
+        expect(result.ok, `${from} -> ${to}`).toBe(expected);
+        if (expected) {
+          expect(attempt.currentSeq).toBe(before.length + 1);
+          expect(attempt.projection.work_runs[runId]?.run_revision).toBe(revision + 1);
+        } else {
+          expect(attempt.events).toEqual(before);
+          expect(attempt.projection.work_runs[runId]?.run_revision).toBe(revision);
+          if (!result.ok) expect(result.error.code).toBe('illegal-transition');
+        }
+        expect(attempt.verifyIntegrity().ok).toBe(true);
       }
-      const tableLegal = ALL_STATUSES.filter((to) => assertWorkRunTransition(from, to).ok).length;
-      expect(legalSeen).toBe(Math.min(tableLegal, 1));
     }
     checkInvariants(w, 'exhaustive-table');
   });
@@ -590,8 +597,7 @@ describe('equip churn under boundary evolution', () => {
         expected_version: 1,
       }).ok,
     ).toBe(false);
-    // pause → resume: the equip gate arms only on a takeover release, so
-    // the boundary-stale equip does not block this run's resumption
+    // A resumed run must also acquire the changed business boundary.
     k.transitionRun({
       actor: agent,
       at: T(3),
@@ -614,7 +620,7 @@ describe('equip churn under boundary evolution', () => {
         resume_checkpoint_id: cp,
         equip_id: eq0.value.id,
       }).ok,
-    ).toBe(true);
+    ).toBe(false);
     // but a new run still cannot start on the stale-marked equip
     expect(
       k.startRun({
@@ -634,6 +640,19 @@ describe('equip churn under boundary evolution', () => {
       expected_version: 1,
     });
     if (!eq1.ok) throw new Error('seed issueEquip failed');
+    expect(
+      k.transitionRun({
+        actor: agent,
+        at: T(7),
+        run_id: runId,
+        to: 'running',
+        reason: 'resume with current boundary',
+        expected_version: 1,
+        run_revision: 2,
+        resume_checkpoint_id: cp,
+        equip_id: eq1.value.id,
+      }).ok,
+    ).toBe(true);
     expect(
       k.startRun({
         actor: agent,
@@ -1254,8 +1273,8 @@ describe('seeded randomized property battery', () => {
     }
   });
 
-  it('scale: 1000 steps on one seed; periodic full rebuilds stay identical', () => {
-    const w = runSimulation(424242, 1000, false);
+  it('scale: 1000 steps on one seed; every full rebuild stays identical', () => {
+    const w = runSimulation(424242, 1000);
     expect(w.ok + w.rejected).toBe(1000);
     const live = w.k.projection;
     expect(Object.keys(live.work_runs).length).toBeGreaterThan(3);

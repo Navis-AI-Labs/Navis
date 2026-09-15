@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { causalClockSnapshotSchema } from './causal-clock.js';
+import { stateVersionSchema } from './project.js';
 import { uuidSchema } from './ids.js';
 
 /**
@@ -19,7 +20,7 @@ export const equipStatusSchema = z.enum(['active', 'stale', 'expired']).meta({
 export const equipSchema = z
   .strictObject({
     id: uuidSchema,
-    state_version: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    state_version: stateVersionSchema,
     work_id: uuidSchema.optional(), // ref Work — the work this equip serves
     participant_id: uuidSchema.optional(), // ref Participant — who is equipped
     allowed_actions: z.array(z.string().min(1).max(128)).max(100).optional(),

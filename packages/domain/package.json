@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Navis domain kernel: governed object schemas and asset lifecycle behavior (active change r0-kernel-foundation).",
+  "description": "Navis domain schemas, project-state authority, and deterministic policy.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

@@ -110,6 +110,22 @@ describe('intended direction: propose', () => {
     expect(ghost.ok).toBe(false);
     if (!ghost.ok) expect(ghost.error.code).toBe('forbidden');
   });
+
+  it('rejects title that is too long', () => {
+    const { k, human } = seeded();
+    const longTitle = 'a'.repeat(257);
+    const result = k.proposeDirection({
+      actor: human,
+      at: AT2,
+      direction_id: '0198b200-0000-7000-8000-000000000050',
+      title: longTitle,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('forbidden');
+      expect(result.error.details?.['reason']).toBe('invalid-fields');
+    }
+  });
 });
 
 describe('intended direction: resolve (human-only, terminal, reason-carrying)', () => {

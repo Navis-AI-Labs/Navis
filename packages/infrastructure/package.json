@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Navis infrastructure: engine-neutral persistence adapters implementing domain ports (active change r0-kernel-foundation).",
+  "description": "Navis infrastructure adapters implementing domain and application ports.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { assertWorkRunTransition } from '../src/schema/workrun.js';
 import { ProjectStateKernel } from '../src/state/project-state-kernel.js';
+import { uuidSchema } from '../src/schema/ids.js';
 
 /**
  * WorkRun execution behavior: the legal-pair table, the start gate
@@ -83,6 +84,94 @@ describe('workrun: transition table (pure function)', () => {
 });
 
 describe('workrun: start gate', () => {
+  it('rejects another work context on start and after a boundary change', () => {
+    const w = seeded();
+    const other = w.k.createWork({
+      actor: w.human,
+      at: T(1),
+      title: 'other work',
+      reason: 'separate scope',
+      expected_version: 0,
+    });
+    if (!other.ok) throw new Error('other work fixture failed');
+    const wrong = w.k.issueEquip({
+      actor: w.human,
+      participant_id: w.agent,
+      work_id: other.value.id,
+      at: T(1),
+      expected_version: 0,
+    });
+    if (!wrong.ok) throw new Error('wrong work equip fixture failed');
+    const runId = '0198b300-0000-7000-8000-000000000030';
+    const start = w.k.startRun({
+      actor: w.agent,
+      at: T(2),
+      run_id: runId,
+      work_id: w.workId,
+      equip_id: wrong.value.id,
+      expected_version: 0,
+    });
+    expect(start.ok).toBe(false);
+    if (!start.ok) expect(start.error.details?.['reason']).toBe('foreign-work-equip');
+    startRun(w, runId);
+    expect(
+      w.k.transitionRun({
+        actor: w.agent,
+        at: T(3),
+        run_id: runId,
+        to: 'paused',
+        reason: 'wait',
+        expected_version: 0,
+        run_revision: 1,
+      }).ok,
+    ).toBe(true);
+    expect(
+      w.k.updateBoundary({
+        actor: w.human,
+        at: T(4),
+        boundary: 'new scope',
+        reason: 'business update',
+        expected_version: 0,
+      }).ok,
+    ).toBe(true);
+    const currentWrong = w.k.issueEquip({
+      actor: w.human,
+      participant_id: w.agent,
+      work_id: other.value.id,
+      at: T(5),
+      expected_version: 1,
+    });
+    if (!currentWrong.ok) throw new Error('current equip fixture failed');
+    const resume = w.k.transitionRun({
+      actor: w.agent,
+      at: T(6),
+      run_id: runId,
+      to: 'running',
+      reason: 'resume',
+      expected_version: 1,
+      run_revision: 2,
+      resume_checkpoint_id: w.k.projection.work_runs[runId]?.checkpoint_id ?? '',
+      equip_id: currentWrong.value.id,
+    });
+    expect(resume.ok).toBe(false);
+    if (!resume.ok) expect(resume.error.details?.['reason']).toBe('foreign-work-equip');
+    expect(w.k.projection.work_runs[runId]?.status).toBe('paused');
+  });
+  it('rejects a stale expected project version even with a current equip', () => {
+    const w = seeded();
+    const before = w.k.events;
+    const result = w.k.startRun({
+      actor: w.agent,
+      at: T(1),
+      run_id: 'stale-run',
+      work_id: w.workId,
+      equip_id: w.equipId,
+      expected_version: 5,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('version-conflict');
+    expect(w.k.events).toEqual(before);
+  });
   it('starting with a current equip succeeds; revision = 1; input_state_version stamped', () => {
     const w = seeded();
     const runId = '0198b300-0000-7000-8000-000000000010';
@@ -127,11 +216,14 @@ describe('workrun: start gate', () => {
       run_revision: 1,
       checkpoint_reason: 'mid-flight pause',
       checkpoint_position: { step: 3 },
+      checkpoint_resume_ref: { token: 'resume-point' },
     });
     const cpId = w.k.projection.work_runs[runId]?.checkpoint_id ?? '';
     const cp = w.k.projection.checkpoints[cpId];
     expect(cp?.reason).toBe('mid-flight pause');
     expect(cp?.position).toEqual({ step: 3 });
+    expect(uuidSchema.safeParse(cpId).success).toBe(true);
+    expect(cp?.resume_ref).toEqual({ token: 'resume-point' });
     const rebuilt = w.k.rebuildProjection();
     expect(JSON.parse(JSON.stringify(rebuilt.checkpoints[cpId]))).toEqual(
       JSON.parse(JSON.stringify(cp)),
@@ -185,6 +277,26 @@ describe('workrun: start gate', () => {
 });
 
 describe('workrun: legal table + audit', () => {
+  it('rejects a transition by an unregistered actor without changing the run or clock', () => {
+    const w = seeded();
+    const runId = '0198b300-0000-7000-8000-000000000020';
+    startRun(w, runId);
+    const before = w.k.projection;
+    const clock = w.k.causal_clock;
+    const result = w.k.transitionRun({
+      actor: '0198b100-0000-7000-8000-00000000ffff',
+      at: T(2),
+      run_id: runId,
+      to: 'paused',
+      reason: 'unauthorized pause',
+      expected_version: 0,
+      run_revision: 1,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.details?.['reason']).toBe('unknown-actor');
+    expect(w.k.projection).toEqual(before);
+    expect(w.k.causal_clock).toEqual(clock);
+  });
   it('running→waiting_input→running requires input evidence', () => {
     const w = seeded();
     const runId = '0198b300-0000-7000-8000-000000000013';
@@ -458,5 +570,26 @@ describe('workrun: legal table + audit', () => {
     expect(JSON.parse(JSON.stringify(rebuilt.work_runs))).toEqual(
       JSON.parse(JSON.stringify(w.k.projection.work_runs)),
     );
+  });
+});
+
+describe('workrun: stale expected project version', () => {
+  it('transitionRun rejects a stale expected_version with version-conflict and zero pollution', () => {
+    const w = seeded();
+    const runId = '0198b300-0000-7000-8000-000000000010';
+    startRun(w, runId);
+    const before = w.k.events;
+    const result = w.k.transitionRun({
+      actor: w.agent,
+      at: T(2),
+      run_id: runId,
+      to: 'paused',
+      reason: 'r',
+      expected_version: 5,
+      run_revision: 1,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('version-conflict');
+    expect(w.k.events).toEqual(before);
   });
 });

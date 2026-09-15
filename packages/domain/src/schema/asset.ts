@@ -159,7 +159,7 @@ export function assertTransition(
     }
     const days = purgeGate?.daysArchived ?? 0;
     const confirmed = purgeGate?.doubleConfirmation ?? false;
-    if (days < PURGE_AGE_THRESHOLD_DAYS || !confirmed) {
+    if (!Number.isFinite(days) || days < PURGE_AGE_THRESHOLD_DAYS || !confirmed) {
       return {
         ok: false,
         error: schemaErrors.purgeConditionsUnmet(days, confirmed, PURGE_AGE_THRESHOLD_DAYS),

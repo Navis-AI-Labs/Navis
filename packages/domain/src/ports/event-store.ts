@@ -28,38 +28,77 @@ export const eventEnvelopeSchema = z.strictObject({
   causation_id: z.string().min(1).max(512).nullable().optional(),
   correlation_id: z.string().min(1).max(512).nullable().optional(),
   idempotency_key: z.string().min(1).max(512).nullable().optional(),
-  payload: z.record(z.string(), z.unknown()),
-  metadata: z.record(z.string(), z.unknown()),
+  payload: z.record(z.string(), z.json()),
+  metadata: z.record(z.string(), z.json()),
   privacy_class: z.enum(['evidence', 'work', 'audit']),
   state_version: z.number().int().min(0),
 });
 
 export type EventEnvelope = z.infer<typeof eventEnvelopeSchema>;
 
+/** Only these event families are eligible for cold archival after a snapshot. */
+export const archivableEventTypes: readonly string[] = Object.freeze([
+  'asset.created',
+  'workrun.started',
+  'workrun.transitioned',
+]);
+
+export const retentionClassSchema = z.enum(['permanent', 'archive_after_snapshot']);
+export type RetentionClass = z.infer<typeof retentionClassSchema>;
+
+/** Unknown event types remain permanent until their retention policy is defined. */
+export function eventRetentionClass(eventType: string): RetentionClass {
+  return archivableEventTypes.includes(eventType) ? 'archive_after_snapshot' : 'permanent';
+}
+
+export const projectionSnapshotSchema = z
+  .strictObject({
+    state_version: z.number().int().nonnegative(),
+    seq: z.number().int().positive(),
+    schema_version: z.number().int().positive(),
+    state: z.record(z.string(), z.json()),
+  })
+  .refine((snapshot) => snapshot.state['seq'] === snapshot.seq, {
+    path: ['state', 'seq'],
+    error: 'snapshot state is missing the required seq cursor or it disagrees with the envelope',
+  });
+
+export type ProjectionSnapshot = Readonly<z.infer<typeof projectionSnapshotSchema>>;
+
 export interface EventStore {
   /**
    * Appends events under optimistic concurrency: the whole batch commits
-   * only if `expectedSeq` equals the project's current head seq; otherwise
-   * a version-conflict error is returned and nothing is written.
+   * only if `expectedSeq` equals the project's current head seq. Permanent
+   * retention classifications commit with the events in the same transaction.
    */
   append(projectId: string, events: readonly EventEnvelope[], expectedSeq: number): Promise<void>;
-  /** Streams committed events from the given seq cursor (inclusive) in seq order. */
+  /** Loads committed events from the given seq cursor (inclusive) in seq order. */
   loadEvents(projectId: string, fromSeq: number): Promise<readonly EventEnvelope[]>;
   /**
-   * Persists a projection snapshot pinned to a state_version + seq. The
-   * snapshot's `state` MUST carry a numeric `seq` cursor (the replay
-   * resume point) — adapters reject the save otherwise. Saving the same
-   * state_version again is a no-op; loading returns the highest saved
-   * state_version. Both adapters behave identically here.
+   * Persists a snapshot at a committed event cursor. Its business version
+   * must match that event. Identical retries are no-ops; different content
+   * at the same cursor is a conflict. The latest snapshot has the highest seq.
    */
   saveSnapshot(projectId: string, snapshot: ProjectionSnapshot): Promise<void>;
   /** Loads the latest snapshot for a project; null when none exists. */
   loadSnapshot(projectId: string): Promise<ProjectionSnapshot | null>;
-}
-
-export interface ProjectionSnapshot {
-  readonly state_version: number;
-  readonly seq: number;
-  readonly schema_version: number;
-  readonly state: Record<string, unknown>;
+  /**
+   * Marks events `[fromSeq, toSeq]` (inclusive) with a retention class —
+   * a pure side-table annotation on the ledger, never a row write to the
+   * event table and never a delete. Idempotent: re-marking the same event
+   * with the same class is a no-op. An already-marked event keeps its
+   * first class: a re-mark with a different class is a silent skip in
+   * every adapter (first-write-wins — classification is decided once,
+   * never re-classed, and the capture flow's ranges legitimately overlap
+   * permanently-classified rows), so callers must not rely on a conflict
+   * signal. Returns the seqs actually marked by this call
+   * (already-marked events are not repeated), so the capture flow can
+   * observe marks-first, snapshot-second.
+   */
+  markRetention(
+    projectId: string,
+    fromSeq: number,
+    toSeq: number,
+    retentionClass: RetentionClass,
+  ): Promise<readonly number[]>;
 }

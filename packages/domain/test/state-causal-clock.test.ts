@@ -82,7 +82,7 @@ function returnFrom(
       ? {}
       : {
           candidates: Array.from({ length: opts.candidates }, () => ({
-            kind: 'note',
+            kind: 'knowledge',
           })),
         }),
   });
@@ -389,6 +389,39 @@ describe('two parallel returns', () => {
 });
 
 describe('equip bootstrap snapshot', () => {
+  it('returns the recorded causal snapshot and refuses another participant return', () => {
+    const w = seeded();
+    const issued = w.k.issueEquip({
+      actor: w.human,
+      participant_id: w.agent,
+      at: T(2),
+      expected_version: 0,
+    });
+    if (!issued.ok) throw new Error('equip fixture failed');
+    expect(issued.value.causal_snapshot).toEqual(
+      w.k.projection.equips[issued.value.id]?.causal_snapshot,
+    );
+    expect(Object.isFrozen(issued.value.causal_snapshot)).toBe(true);
+    const before = w.k.events;
+    const result = w.k.submitReturn({
+      actor: w.agentB,
+      at: T(3),
+      equip_id: issued.value.id,
+      candidates: [{ kind: 'artifact' }],
+      expected_version: 0,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.details?.['reason']).toBe('foreign-equip');
+    expect(w.k.events).toEqual(before);
+  });
+
+  it('refuses to issue an equip to an unregistered participant', () => {
+    const w = seeded();
+    expect(
+      w.k.issueEquip({ actor: w.human, participant_id: nextUuid(), at: T(2), expected_version: 0 })
+        .ok,
+    ).toBe(false);
+  });
   it('stamps the authoritative clock at issuance', () => {
     const w = seeded();
     // each equip is stamped at issuance: human=2 for the first, human=3
@@ -510,7 +543,7 @@ describe('internal-state isolation', () => {
 });
 
 describe('adversarial: lying callers and hostile logs', () => {
-  it("a caller inflating others' components cannot fake dominance", () => {
+  it('an inflated claim changes the recorded verdict without granting acceptance authority', () => {
     const w = seeded();
     // lie: human:99 vs true 4 — inflation only makes the caller look more
     // knowledgeable (both components ahead) -> dominates, never concurrent

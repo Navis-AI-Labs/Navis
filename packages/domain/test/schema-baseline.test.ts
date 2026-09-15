@@ -885,11 +885,11 @@ describe('acceptance rationale rule', () => {
   });
 
   it('accepts an accepted verdict with null rationale', () => {
-    const result = acceptanceSchema.safeParse({ ...base(), result: 'accepted' });
+    const result = acceptanceSchema.safeParse({ ...base(), result: 'accepted', rationale: null });
     expect(result.success).toBe(true);
   });
 
-  it('keeps two independent judgments append-only at the domain layer', () => {
+  it('represents independent judgments with distinct identities', () => {
     const first = acceptanceSchema.parse({
       ...base(),
       result: 'conditional',

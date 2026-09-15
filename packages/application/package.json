@@ -1,0 +1,28 @@
+{
+  "name": "@navis/application",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Navis application use cases over domain ports.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json --pretty false",
+    "clean": "tsc -b tsconfig.json --clean",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit --pretty false"
+  },
+  "dependencies": {
+    "@navis/domain": "workspace:*"
+  },
+  "devDependencies": {
+    "@navis/infrastructure": "workspace:*",
+    "@types/node": "24.13.3"
+  }
+}

@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+/** Milliseconds in a fixed 24-hour day for elapsed-time calculations. */
+export const MILLISECONDS_PER_DAY = 86_400_000;
+
 /**
  * The one legal shape of time in the system: a millisecond-precision, UTC-only
  * ISO 8601 instant with a literal Z suffix, in extended format.

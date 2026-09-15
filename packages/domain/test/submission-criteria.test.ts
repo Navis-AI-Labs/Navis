@@ -18,6 +18,10 @@ function context(overrides: Partial<ActionContext> = {}): ActionContext {
 }
 
 describe('submission criteria contract', () => {
+  it('does not resolve inherited object properties as criteria', () => {
+    expect(() => resolveCriteria('constructor')).toThrow('criteria not defined: constructor');
+    expect(() => resolveCriteria('__proto__')).toThrow('criteria not defined: __proto__');
+  });
   it('resolves the baseline criteria by its contract name', () => {
     expect(resolveCriteria('check_actor_permission')).toBe(checkActorPermission);
   });

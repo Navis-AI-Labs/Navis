@@ -3,7 +3,7 @@
 ## Purpose
 
 > **Capability intent** — The WorkRun is where AI labor happens under human supervision. Its lifecycle follows an adopted legal transition table (16 pairs, terminal states have no exits); every gated resumption demands its condition evidence (input provided, human approval, or the run's own latest checkpoint); every run event advances a per-run optimistic-concurrency revision; and intervention follows multi-read-one-write concurrency — observe and assist in parallel, exclusive takeover behind a presence precondition, a consent ledger per session, and a release that forces a fresh Equip before the run resumes.
-> **Scope boundary** — This capability defines only: the single-run lifecycle inside the kernel — states, transition legality, gate evidence, run_revision concurrency, intervention sessions and consent, and the release re-equip gate. Not included: checkpoint context rebuild beyond the state-version anchor (open question OQ-25), multi-agent takeover arbitration beyond first-come-first-served, cross-run orchestration, transport or UI surfaces, and the authorization system beyond the kernel's human-role checks.
+> **Scope boundary** — This capability defines only: the single-run lifecycle inside the kernel — states, transition legality, gate evidence, run_revision concurrency, intervention sessions and consent, and the release re-equip gate. Not included: checkpoint context rebuild beyond the state-version anchor, multi-agent takeover arbitration beyond first-come-first-served, cross-run orchestration, transport or UI surfaces, and the authorization system beyond the kernel's human-role checks.
 
 ## Requirements
 

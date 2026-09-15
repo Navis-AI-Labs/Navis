@@ -306,11 +306,14 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 
 CREATE TABLE IF NOT EXISTS project_snapshots (
   project_id     uuid NOT NULL,
+  seq            bigint NOT NULL CHECK (seq >= 1),
   state_version  bigint NOT NULL,
   schema_version integer NOT NULL,
   state          jsonb NOT NULL,
   created_at     timestamptz NOT NULL,
-  PRIMARY KEY (project_id, state_version)
+  PRIMARY KEY (project_id, seq),
+  FOREIGN KEY (project_id, seq) REFERENCES project_events (project_id, seq),
+  CHECK (state->>'seq' IS NOT NULL AND (state->>'seq')::bigint = seq)
 );
 
 -- ============ L4: read models / outbox ============
@@ -393,11 +396,9 @@ CREATE TABLE IF NOT EXISTS event_retention_marks (
 INSERT INTO event_retention_marks (project_id, seq, retention_class)
 SELECT project_id, seq, 'permanent'
 FROM project_events
-WHERE event_type IN (
-  'boundary.updated',
-  'project.status_changed',
-  'schema.registered',
-  'acceptance.recorded',
-  'competitive.selection.recorded'
+WHERE event_type NOT IN (
+  'asset.created',
+  'workrun.started',
+  'workrun.transitioned'
 )
 ON CONFLICT (project_id, seq) DO NOTHING;

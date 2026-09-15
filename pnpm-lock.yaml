@@ -39,6 +39,19 @@ importers:
         specifier: 4.1.11
         version: 4.1.11(@types/node@24.13.3)(@vitest/coverage-v8@4.1.11)(vite@8.2.1(@types/node@24.13.3)(yaml@2.9.0))
 
+  packages/application:
+    dependencies:
+      '@navis/domain':
+        specifier: workspace:*
+        version: link:../domain
+    devDependencies:
+      '@navis/infrastructure':
+        specifier: workspace:*
+        version: link:../infrastructure
+      '@types/node':
+        specifier: 24.13.3
+        version: 24.13.3
+
   packages/contracts:
     dependencies:
       zod:

@@ -103,6 +103,18 @@ function close(
 }
 
 describe('intervention: multi-read-one-write', () => {
+  it('rejects reuse of an active or closed session identity without closing another participant', () => {
+    const w = seeded();
+    expect(open(w, w.human, 'unique-session', 'observe')).toBe(true);
+    const before = w.k.events;
+    const revision = rev(w);
+    expect(open(w, w.agent, 'unique-session', 'assist')).toBe(false);
+    expect(w.k.events).toEqual(before);
+    expect(rev(w)).toBe(revision);
+    expect(close(w, w.human, 'unique-session', 3)).toBe(true);
+    expect(open(w, w.agent, 'unique-session', 'assist', T(4))).toBe(false);
+    expect(w.k.projection.work_runs[w.runId]?.intervention_sessions).toHaveLength(1);
+  });
   it('parallel observers and assistants coexist (five sessions)', () => {
     const w = seeded();
     expect(open(w, w.agent2, 's1', 'observe')).toBe(true);
@@ -251,6 +263,44 @@ describe('intervention: consent lifecycle (pending on open, terminal on close)',
 });
 
 describe('intervention: close authority + re-equip gate', () => {
+  it('uses ledger order for post-release freshness even when caller time moves backward', () => {
+    const w = seeded();
+    expect(open(w, w.human, 'ordered-observe', 'observe')).toBe(true);
+    expect(open(w, w.human, 'ordered-takeover', 'takeover')).toBe(true);
+    expect(
+      w.k.transitionRun({
+        actor: w.agent,
+        at: T(3),
+        run_id: w.runId,
+        to: 'paused',
+        reason: 'takeover',
+        expected_version: 0,
+        run_revision: rev(w),
+      }).ok,
+    ).toBe(true);
+    expect(close(w, w.human, 'ordered-takeover', 4, 'granted')).toBe(true);
+    const equip = w.k.issueEquip({
+      actor: w.human,
+      participant_id: w.agent,
+      at: T(3),
+      expected_version: 0,
+    });
+    if (!equip.ok) throw new Error('post-release equip fixture failed');
+    expect(
+      w.k.transitionRun({
+        actor: w.agent,
+        at: T(5),
+        run_id: w.runId,
+        to: 'running',
+        reason: 'continue',
+        expected_version: 0,
+        run_revision: rev(w),
+        equip_id: equip.value.id,
+        resume_checkpoint_id: w.k.projection.work_runs[w.runId]?.checkpoint_id ?? '',
+      }).ok,
+    ).toBe(true);
+    expect(w.k.verifyIntegrity().ok).toBe(true);
+  });
   it('agent cannot close another participant session; human may close any; owner may close own', () => {
     const w = seeded();
     expect(open(w, w.human, 'c1', 'assist')).toBe(true);
@@ -425,5 +475,80 @@ describe('intervention: close authority + re-equip gate', () => {
     expect(JSON.parse(JSON.stringify(rebuilt.work_runs))).toEqual(
       JSON.parse(JSON.stringify(w.k.projection.work_runs)),
     );
+  });
+});
+
+describe('intervention: stale expected project version', () => {
+  it('openIntervention rejects a stale expected_version with version-conflict and zero pollution', () => {
+    const w = seeded();
+    const before = w.k.events;
+    const result = w.k.openIntervention({
+      actor: w.agent2,
+      at: T(2),
+      run_id: w.runId,
+      session_id: 'stale-expected',
+      mode: 'observe',
+      expected_version: 5,
+      run_revision: rev(w),
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('version-conflict');
+    expect(w.k.events).toEqual(before);
+  });
+
+  it('closeIntervention rejects a stale expected_version with version-conflict and zero pollution', () => {
+    const w = seeded();
+    expect(open(w, w.human, 'close-me', 'observe')).toBe(true);
+    const before = w.k.events;
+    const result = w.k.closeIntervention({
+      actor: w.human,
+      at: T(3),
+      run_id: w.runId,
+      session_id: 'close-me',
+      expected_version: 5,
+      run_revision: rev(w),
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('version-conflict');
+    expect(w.k.events).toEqual(before);
+  });
+});
+
+describe('intervention: field validation edge cases', () => {
+  it('openIntervention rejects invalid session_id field', () => {
+    const w = seeded();
+    const result = w.k.openIntervention({
+      actor: w.human,
+      at: T(2),
+      run_id: w.runId,
+      session_id: '', // invalid: empty string
+      mode: 'observe',
+      expected_version: 0,
+      run_revision: rev(w),
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('forbidden');
+      expect(result.error.details?.['reason']).toBe('invalid-fields');
+    }
+  });
+
+  it('openIntervention rejects duplicate session_id', () => {
+    const w = seeded();
+    expect(open(w, w.human, 'duplicate', 'observe')).toBe(true);
+    const result = w.k.openIntervention({
+      actor: w.human,
+      at: T(3),
+      run_id: w.runId,
+      session_id: 'duplicate', // already exists
+      mode: 'observe',
+      expected_version: 0,
+      run_revision: rev(w),
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('forbidden');
+      expect(result.error.details?.['reason']).toBe('session-exists');
+    }
   });
 });

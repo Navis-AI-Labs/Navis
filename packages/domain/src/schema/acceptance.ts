@@ -20,11 +20,7 @@ export const acceptanceTargetTypeSchema = z.enum(['Asset']).meta({
   id: 'AcceptanceTargetType',
 });
 
-/**
- * Verdicts that demand a written rationale. Declared as a subset of the
- * result enum — add a fourth verdict and this fails to compile until a
- * maintainer decides whether the new verdict needs a reason.
- */
+/** Reasons preserve the basis for adverse or conditional judgments. */
 const RATIONALE_REQUIRED_RESULTS: Partial<Record<z.infer<typeof acceptanceResultSchema>, boolean>> =
   {
     rejected: true,
@@ -43,13 +39,13 @@ export const acceptanceSchema = z
     target_type: acceptanceTargetTypeSchema,
     actor: uuidSchema, // a Participant reference; the human-only rule is enforced above this layer
     result: acceptanceResultSchema,
-    rationale: textSchema.optional(),
+    rationale: textSchema.nullable().optional(),
     // the criteria as of judgment time; the ledger must answer which criteria version applied
     criteria_snapshot: z.record(z.string(), z.unknown()),
     evidence_refs: z.array(uuidSchema).max(100).optional(), // evidence relied upon at judgment time
   })
   /** Baseline field rule: rejected/conditional carry a written reason; the issue lands on the rationale path for field-level error mapping. */
-  .refine((v) => !RATIONALE_REQUIRED_RESULTS[v.result] || !!v.rationale, {
+  .refine((v) => !RATIONALE_REQUIRED_RESULTS[v.result] || (v.rationale?.trim().length ?? 0) > 0, {
     path: ['rationale'],
     error: 'rationale is required when result is rejected or conditional',
   })

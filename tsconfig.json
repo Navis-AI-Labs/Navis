@@ -7,6 +7,12 @@
     },
     {
       "path": "./packages/domain"
+    },
+    {
+      "path": "./packages/infrastructure"
+    },
+    {
+      "path": "./packages/application"
     }
   ]
 }

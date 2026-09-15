@@ -26,7 +26,7 @@ function acceptedAsset(k: ProjectStateKernel, actor: string): string {
     at: T0,
     kind: 'artifact',
     scope: 'project',
-    content: { storage: 'inline', sha256: 'a'.repeat(64) },
+    content: { media_type: 'text/plain', storage: 'inline', sha256: 'a'.repeat(64) },
     expected_version: k.stateVersion,
   });
   expect(created.ok).toBe(true);
@@ -44,6 +44,75 @@ function acceptedAsset(k: ProjectStateKernel, actor: string): string {
 }
 
 describe('reconciliation: declaration pinned to behavior', () => {
+  it.each([
+    'update_policy',
+    'transition_asset',
+    'set_project_status',
+    'resolve_direction',
+  ] as const)('pins %s to the actual human-only command', (action) => {
+    const { k, human, agent } = seedKernel();
+    const assetId = acceptedAsset(k, human);
+    const directionId = uuid(90);
+    expect(
+      k.proposeDirection({ actor: agent, at: T0, direction_id: directionId, title: 'next work' })
+        .ok,
+    ).toBe(true);
+    const commands = {
+      update_policy: (actor: string) =>
+        k.updatePolicy({
+          actor,
+          at: T0,
+          reason: 'reviewed policy',
+          event_count_window: 100,
+          expected_version: 0,
+        }),
+      transition_asset: (actor: string) =>
+        k.transitionAsset({
+          actor,
+          at: T0,
+          reason: 'reviewed retirement',
+          asset_id: assetId,
+          to: 'deprecated',
+          expected_version: 0,
+        }),
+      set_project_status: (actor: string) =>
+        k.setProjectStatus({ actor, at: T0, reason: 'pause', to: 'paused', expected_version: 0 }),
+      resolve_direction: (actor: string) =>
+        k.resolveDirection({
+          actor,
+          at: T0,
+          direction_id: directionId,
+          resolution: 'confirmed',
+          resolution_reason: 'reviewed direction',
+          expected_version: 0,
+        }),
+    };
+    const criteria = resolveCriteria('check_actor_permission');
+    const before = k.events;
+    expect(
+      criteria({
+        actor: agent,
+        action,
+        parameters: {},
+        state_version: 0,
+        actor_snapshot: { registered: true, type: 'agent' },
+      }).passed,
+    ).toBe(false);
+    const denied = commands[action](agent);
+    expect(denied.ok).toBe(false);
+    if (!denied.ok) expect(denied.error.code).toBe('forbidden');
+    expect(k.events).toEqual(before);
+    expect(
+      criteria({
+        actor: human,
+        action,
+        parameters: {},
+        state_version: 0,
+        actor_snapshot: { registered: true, type: 'human' },
+      }).passed,
+    ).toBe(true);
+    expect(commands[action](human).ok).toBe(true);
+  });
   it('the registered name set equals the core type schema exports', () => {
     const registryNames = typeRegistry
       .list()
@@ -87,7 +156,7 @@ describe('reconciliation: declaration pinned to behavior', () => {
       at: T0,
       asset_id: assetId,
       target_ref: 'production',
-      target_type: 'environment',
+      target_type: 'staging',
       expected_version: k.stateVersion,
     });
     expect(delivery.ok).toBe(false);

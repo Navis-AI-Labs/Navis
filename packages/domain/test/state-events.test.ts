@@ -6,7 +6,7 @@ import {
   canonicalEquals,
   parseCanonicalJson,
 } from '../src/state/canonical.js';
-import { EventHistory } from '../src/state/event-history.js';
+import { EventHistory, verifyEventHistory } from '../src/state/event-history.js';
 import { stateEventSchema, type StateEvent } from '../src/state/events.js';
 
 const at = '2026-09-02T00:00:00.000Z';
@@ -55,6 +55,12 @@ describe('canonical JSON', () => {
     const cyclic: Record<string, unknown> = {};
     cyclic['self'] = cyclic;
     expect(() => deepFreeze(cyclic)).toThrow('cyclic');
+    const shared = { value: 1 };
+    const graph = deepFreeze({ first: shared, second: shared });
+    expect(graph.first).toBe(graph.second);
+    expect(() => {
+      graph.second.value = 2;
+    }).toThrow();
   });
 });
 
@@ -104,22 +110,26 @@ describe('EventHistory', () => {
     }).toThrow();
   });
 
-  it('integrity probe detects an unfrozen or tampered store', () => {
+  it('public collections cannot alter history and corrupt replay input is rejected', () => {
     const h = new EventHistory();
     h.append(evt(1));
     expect(h.verifyIntegrity().ok).toBe(true);
-    // simulate tampering by writing through the internal array — freeze makes
-    // this fail silently in non-strict contexts, so probe via a swapped cell
-    const internal = (h as unknown as { events: StateEvent[] }).events;
-    internal[0] = evt(1, 'forged_type');
-    expect(h.verifyIntegrity().ok).toBe(false); // unfrozen store detected
-    // a seq gap inside the store is caught by the schema/seq probe
-    internal[0] = deepFreeze(evt(1));
-    h.append(evt(2));
-    internal[1] = deepFreeze(evt(5)); // frozen + schema-valid, but a seq gap
-    const gap = h.verifyIntegrity();
+    expect(() => (h.all() as StateEvent[]).pop()).toThrow();
+    expect(() => (h.load(1) as StateEvent[]).splice(0, 1)).toThrow();
+    expect(Object.getOwnPropertyNames(h)).not.toContain('events');
+    expect(h.currentSeq).toBe(1);
+    const gap = verifyEventHistory([evt(1), evt(5)]);
     expect(gap.ok).toBe(false);
     if (!gap.ok) expect(gap.atSeq).toBe(5);
+    expect(verifyEventHistory([{ ...evt(1), type: '' }]).ok).toBe(false);
+  });
+
+  it('appending owns a copy without freezing caller data', () => {
+    const h = new EventHistory();
+    const input = evt(1, 'hold_registered', { data: { nested: { value: 1 } } });
+    h.append(input);
+    (input.data as { nested: { value: number } }).nested.value = 2;
+    expect(h.head?.data).toEqual({ nested: { value: 1 } });
   });
 
   it('load(fromSeq) is cursor-inclusive and conservative on bad cursors', () => {

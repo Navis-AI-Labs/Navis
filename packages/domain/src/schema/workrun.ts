@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { schemaErrors, type SchemaError } from '../errors/index.js';
 import { instantSchema } from './time.js';
 import { uuidSchema } from './ids.js';
+import { stateVersionSchema } from './project.js';
 
 /**
  * WorkRun — a resumable business-work execution unit.
@@ -77,10 +78,13 @@ export const workRunSchema = z
     // carry the previously observed value as their expected revision
     run_revision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
     intervention_mode: interventionModeSchema.optional(),
-    intervention_sessions: z.array(interventionSessionSchema).max(100).optional(),
+    // Append-only participation ledger: observe/assist sessions run in parallel
+    // without limit (workrun-execution capability), so the record list itself
+    // carries no length cap — concurrency rules live in the intervention layer.
+    intervention_sessions: z.array(interventionSessionSchema).optional(),
     checkpoint_id: uuidSchema.optional(), // ref Checkpoint; resume position
     // project state version the run started from
-    input_state_version: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+    input_state_version: stateVersionSchema.optional(),
     attempt: z.number().int().min(1).max(1000).optional(), // resumption attempt counter
     execution_refs: executionRefsSchema.optional(),
   })

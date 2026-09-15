@@ -1,4 +1,5 @@
 import type { InterventionMode } from '../schema/workrun.js';
+import type { RunSessionRow } from './projection.js';
 
 /**
  * Intervention concurrency manager — the multi-read-one-write session
@@ -18,16 +19,6 @@ import type { InterventionMode } from '../schema/workrun.js';
  * - consent: assist and takeover sessions open as `pending` and record their
  *   terminal value (`granted` | `denied`) when closed; observe needs none.
  */
-
-/** One intervention session on a run — the session-ledger row shape. */
-export interface RunSessionRow {
-  readonly session_id: string;
-  readonly participant_id: string;
-  readonly mode: InterventionMode;
-  readonly started_at: string;
-  readonly ended_at?: string;
-  readonly consent_status?: 'granted' | 'denied' | 'pending';
-}
 
 /** Sessions that have not ended yet. */
 export function activeSessions(sessions: readonly RunSessionRow[]): readonly RunSessionRow[] {

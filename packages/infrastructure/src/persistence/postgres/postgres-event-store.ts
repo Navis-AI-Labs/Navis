@@ -1,9 +1,14 @@
 import type postgres from 'postgres';
 import {
   eventEnvelopeSchema,
+  archivableEventTypes,
+  immutableCopy,
+  projectionSnapshotSchema,
+  retentionClassSchema,
   type EventEnvelope,
   type EventStore,
   type ProjectionSnapshot,
+  type RetentionClass,
 } from '@navis/domain';
 
 /**
@@ -25,14 +30,24 @@ export class PostgresEventStore implements EventStore {
     events: readonly EventEnvelope[],
     expectedSeq: number,
   ): Promise<void> {
+    const owned = events.map((event) => immutableCopy(eventEnvelopeSchema.parse(event)));
     // The head test-and-set plus INSERT ride ONE transaction: two racing
     // appends with the same expected seq cannot both commit. The SELECT
     // alone is not the guard — a concurrent committer between SELECT and
     // INSERT surfaces as a UNIQUE(project_id, seq) violation, which is
     // rethrown below with the same version-conflict semantics.
     try {
-      await this.appendInTransaction(projectId, events, expectedSeq);
+      await this.appendInTransaction(projectId, owned, expectedSeq);
     } catch (error) {
+      const constraint = (error as { readonly constraint?: unknown }).constraint;
+      if (
+        constraint === 'project_events_pkey' ||
+        (error instanceof Error && error.message.includes('project_events_pkey'))
+      ) {
+        throw new Error(`event-id-conflict: an event identity is already committed`, {
+          cause: error,
+        });
+      }
       if (error instanceof Error && error.message.includes('project_events_project_id_seq_key')) {
         throw new Error(
           `version-conflict: a concurrent append claimed a seq in [${String(expectedSeq)}+${String(events.length - 1)}] for project ${projectId}`,
@@ -78,7 +93,7 @@ export class PostgresEventStore implements EventStore {
       // not one per event; every value is bound as a query parameter.
       const columns =
         'event_id, project_id, seq, aggregate_type, aggregate_id, aggregate_revision, event_type, event_schema_version, occurred_at, recorded_at, actor_participant_id, causation_id, correlation_id, idempotency_key, payload, metadata, privacy_class, state_version';
-      type Cell = string | number | null;
+      type Cell = string | number | null | postgres.Parameter;
       const values: Cell[][] = events.map((e): Cell[] => [
         e.event_id,
         e.project_id,
@@ -94,8 +109,12 @@ export class PostgresEventStore implements EventStore {
         e.causation_id ?? null,
         e.correlation_id ?? null,
         e.idempotency_key ?? null,
-        JSON.stringify(e.payload),
-        JSON.stringify(e.metadata),
+        // jsonb columns bind through sql.json() — an explicit-oid jsonb
+        // Parameter the driver serializes from the object itself. A plain
+        // string arrives as text and PG coerces it into a JSON string
+        // scalar (double-encoded), which breaks state/payload cursors.
+        this.sql.json(e.payload),
+        this.sql.json(e.metadata),
         e.privacy_class,
         e.state_version,
       ]);
@@ -107,6 +126,13 @@ export class PostgresEventStore implements EventStore {
         .join(', ');
       const flat = values.flat();
       await tx.unsafe(`INSERT INTO project_events (${columns}) VALUES ${placeholders}`, flat);
+      await tx`
+        INSERT INTO event_retention_marks (project_id, seq, retention_class)
+        SELECT project_id, seq, 'permanent' FROM project_events
+        WHERE project_id = ${projectId} AND seq > ${head}
+          AND NOT (event_type = ANY (${archivableEventTypes}::text[]))
+        ON CONFLICT (project_id, seq) DO NOTHING
+      `;
     });
   }
 
@@ -125,40 +151,78 @@ export class PostgresEventStore implements EventStore {
   }
 
   async saveSnapshot(projectId: string, snapshot: ProjectionSnapshot): Promise<void> {
-    // Same write-time gate as the in-memory adapter: a snapshot whose state
-    // lacks the seq cursor would poison every later load.
-    const seq = snapshot.state['seq'];
-    if (typeof seq !== 'number' || !Number.isFinite(seq)) {
-      throw new Error('snapshot state is missing the required seq cursor');
-    }
-    await this.sql`
-      INSERT INTO project_snapshots (project_id, state_version, schema_version, state, created_at)
-      VALUES (${projectId}, ${snapshot.state_version}, ${snapshot.schema_version},
-              ${JSON.stringify(snapshot.state)}, now())
-      ON CONFLICT (project_id, state_version) DO NOTHING
-    `;
+    const owned = immutableCopy(projectionSnapshotSchema.parse(snapshot));
+    await this.sql.begin(async (tx) => {
+      const cursor =
+        await tx`SELECT state_version FROM project_events WHERE project_id = ${projectId} AND seq = ${owned.seq}`;
+      if (cursor[0] === undefined || Number(cursor[0]['state_version']) !== owned.state_version) {
+        throw new Error('snapshot cursor is not committed at the supplied state version');
+      }
+      const saved = await tx`
+        INSERT INTO project_snapshots (project_id, seq, state_version, schema_version, state, created_at)
+        VALUES (${projectId}, ${owned.seq}, ${owned.state_version}, ${owned.schema_version}, ${this.sql.json(owned.state)}, now())
+        ON CONFLICT (project_id, seq) DO UPDATE SET state = project_snapshots.state
+        WHERE project_snapshots.state_version = EXCLUDED.state_version
+          AND project_snapshots.schema_version = EXCLUDED.schema_version
+          AND project_snapshots.state = EXCLUDED.state
+        RETURNING seq
+      `;
+      if (saved.length === 0)
+        throw new Error('snapshot-content-conflict: cursor already has different content');
+    });
   }
 
   async loadSnapshot(projectId: string): Promise<ProjectionSnapshot | null> {
     const rows = await this.sql`
-      SELECT state_version, schema_version, state
+      SELECT seq, state_version, schema_version, state
       FROM project_snapshots
       WHERE project_id = ${projectId}
-      ORDER BY state_version DESC LIMIT 1
+      ORDER BY seq DESC LIMIT 1
     `;
     const row = rows[0] as Record<string, unknown> | undefined;
     if (row === undefined) return null;
     const state = parseJsonb(row['state'], 'project_snapshots.state');
-    const seq = state['seq'];
-    if (typeof seq !== 'number') {
-      throw new Error('snapshot state is missing the required seq cursor');
+    return immutableCopy(
+      projectionSnapshotSchema.parse({
+        state_version: Number(row['state_version']),
+        schema_version: Number(row['schema_version']),
+        state,
+        seq: Number(row['seq']),
+      }),
+    );
+  }
+
+  async markRetention(
+    projectId: string,
+    fromSeq: number,
+    toSeq: number,
+    retentionClass: RetentionClass,
+  ): Promise<readonly number[]> {
+    retentionClassSchema.parse(retentionClass);
+    if (!Number.isSafeInteger(Math.floor(fromSeq)) || !Number.isSafeInteger(Math.floor(toSeq))) {
+      throw new Error('invalid retention sequence range');
     }
-    return {
-      state_version: Number(row['state_version']),
-      schema_version: Number(row['schema_version']),
-      state,
-      seq,
-    };
+    const lo = Math.max(1, Math.floor(fromSeq));
+    const hi = Math.floor(toSeq);
+    if (hi < lo) return [];
+    // Select committed rows in the database so large ranges never require
+    // host-side iteration. Existing classifications must survive overlapping
+    // captures, and absent events must not acquire retention marks.
+    return await this.sql.begin(async (tx) => {
+      const inserted = await tx`
+        INSERT INTO event_retention_marks (project_id, seq, retention_class)
+        SELECT pe.project_id, pe.seq, ${retentionClass}
+        FROM project_events pe
+        WHERE pe.project_id = ${projectId}
+          AND pe.seq >= ${lo}
+          AND pe.seq <= ${hi}
+          AND (${retentionClass} = 'permanent' OR pe.event_type = ANY (${archivableEventTypes}::text[]))
+        ON CONFLICT (project_id, seq) DO NOTHING
+        RETURNING seq
+      `;
+      const rows = inserted as unknown as { seq: unknown }[];
+      return rows.map((r) => Number(r.seq)).sort((a, b) => a - b);
+    });
   }
 }
 

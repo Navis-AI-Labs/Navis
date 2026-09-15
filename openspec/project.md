@@ -33,9 +33,9 @@ An OpenSpec design must list its selected standards. An implementation task must
 
 ## Current phase
 
-Two changes are archived: `foundation-baseline` (reproducible repository tooling and business-neutral public contract primitives) and `r0-kernel-foundation` (domain object model per the accepted field baseline, asset lifecycle, schema and kernel error registries, the project-state kernel runtime — append-only event history, replayable versioned projection, gated commands —, the domain `ports/event-store.ts`, and `packages/infrastructure` with in-memory + PostgreSQL-wire EventStore adapters and migration `001_events.sql`).
+Accepted behavior is organized in eight main specifications. Archived changes establish the toolchain and public transport primitives, domain model and persistence, WorkRun and intervention behavior, causal-clock detection, and the closed schema registry.
 
-No change is currently active. The repository is between changes: the implemented capabilities live under `openspec/specs/` as accepted behavior, and the next change must be proposed, reviewed, and admitted before any new boundary materializes in the code tree. Only a boundary with executable responsibility in an active change may exist in the code tree. Planned architecture remains in `docs/architecture.md`; do not create empty directories or README placeholders.
+The active change is `snapshot-strength-foundation`: snapshot capture and restoration, retention classification, strength suggestions, and corrections to the authority and participation contracts these capabilities depend on. Its Application capture use case is the fourth activated package. Earlier validation passed, but further review found command inputs that violate the shared field contract and prevent snapshot capture. Those corrections are under design review; implementation is paused and the change is not complete or archived. Only admitted executable responsibilities belong in the code tree; future services and applications remain in `docs/architecture.md` until admitted.
 
 ## Project invariants
 

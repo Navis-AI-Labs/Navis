@@ -46,6 +46,10 @@ const humanOnlyActions: ReadonlySet<string> = new Set([
   'cancel_work',
   'redirect_work',
   'accept_asset',
+  'update_policy',
+  'transition_asset',
+  'set_project_status',
+  'resolve_direction',
 ]);
 
 /**
@@ -69,7 +73,7 @@ const criteriaRegistry: Readonly<Record<string, CriteriaFunction>> = Object.free
 
 export function resolveCriteria(name: string): CriteriaFunction {
   const criteria = criteriaRegistry[name];
-  if (criteria === undefined) {
+  if (!Object.hasOwn(criteriaRegistry, name) || criteria === undefined) {
     throw new Error(`criteria not defined: ${name}`);
   }
   return criteria;

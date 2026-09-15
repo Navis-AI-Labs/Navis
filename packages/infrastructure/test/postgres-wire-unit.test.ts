@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type postgres from 'postgres';
 
 import { eventEnvelopeSchema, uuidv7 } from '@navis/domain';
-import type { EventEnvelope } from '@navis/domain';
+import type { EventEnvelope, RetentionClass } from '@navis/domain';
+
+const PERMANENT: RetentionClass = 'permanent';
+const ARCHIVE: RetentionClass = 'archive_after_snapshot';
 
 import { readFileSync } from 'node:fs';
 
@@ -31,7 +34,10 @@ interface FakeSqlOptions {
   headRows?: unknown[];
   loadRows?: unknown[];
   snapshotRows?: unknown[];
+  cursorRows?: unknown[];
+  savedRows?: unknown[];
   appliedRows?: unknown[];
+  markRows?: unknown[];
   unsafeError?: Error;
 }
 
@@ -48,16 +54,26 @@ function makeFakeSql(options: FakeSqlOptions = {}) {
     if (text.includes('SELECT seq FROM project_events')) {
       return Promise.resolve(options.headRows ?? []);
     }
+    if (text.includes('SELECT state_version FROM project_events')) {
+      return Promise.resolve(options.cursorRows ?? []);
+    }
+    if (text.includes('INSERT INTO project_snapshots')) {
+      return Promise.resolve(options.savedRows ?? [{ seq: values[1] }]);
+    }
     if (text.includes('FROM project_events') && text.includes('ORDER BY seq ASC')) {
       return Promise.resolve(options.loadRows ?? []);
     }
     if (text.includes('FROM project_snapshots')) {
       return Promise.resolve(options.snapshotRows ?? []);
     }
+    if (text.includes('INSERT INTO event_retention_marks')) {
+      return Promise.resolve(options.markRows ?? []);
+    }
     return Promise.resolve([]);
   };
   const makeTx = () => {
     const tx = Object.assign(tag, {
+      json: (value: unknown): { oid: number; value: unknown } => ({ oid: 3802, value }),
       unsafe: (text: string, params: unknown[]): Promise<unknown[]> => {
         unsafeCalls.push({ text, params });
         if (options.unsafeError !== undefined) return Promise.reject(options.unsafeError);
@@ -71,6 +87,7 @@ function makeFakeSql(options: FakeSqlOptions = {}) {
       beginCount += 1;
       return Promise.resolve(cb(makeTx()));
     },
+    json: (value: unknown): { oid: number; value: unknown } => ({ oid: 3802, value }),
     options: { max: POOL_MAX },
     end: (): Promise<void> => Promise.resolve(),
   }) as unknown as postgres.Sql;
@@ -122,6 +139,48 @@ function driverRow(projectId: string, seq: number): Record<string, unknown> {
 }
 
 describe('PostgresEventStore against a scripted wire (unit, no database)', () => {
+  it('refuses a snapshot whose cursor is not committed at its business version', async () => {
+    const id = uuidv7();
+    for (const cursorRows of [[], [{ state_version: '99' }]]) {
+      const fake = makeFakeSql({ cursorRows });
+      await expect(
+        new PostgresEventStore(fake.sql).saveSnapshot(id, {
+          seq: 2,
+          state_version: 0,
+          schema_version: 1,
+          state: { seq: 2 },
+        }),
+      ).rejects.toThrow(/not committed/);
+      expect(
+        fake.queries.some((query) => query.text.includes('INSERT INTO project_snapshots')),
+      ).toBe(false);
+    }
+  });
+
+  it('surfaces a stored snapshot content conflict without reporting success', async () => {
+    const fake = makeFakeSql({ cursorRows: [{ state_version: '0' }], savedRows: [] });
+    await expect(
+      new PostgresEventStore(fake.sql).saveSnapshot(uuidv7(), {
+        seq: 2,
+        state_version: 0,
+        schema_version: 1,
+        state: { seq: 2 },
+      }),
+    ).rejects.toThrow(/snapshot-content-conflict/);
+  });
+
+  it('rejects an unbounded retention range before touching the driver', async () => {
+    const fake = makeFakeSql();
+    await expect(
+      new PostgresEventStore(fake.sql).markRetention(
+        uuidv7(),
+        1,
+        Number.POSITIVE_INFINITY,
+        ARCHIVE,
+      ),
+    ).rejects.toThrow(/sequence range/);
+    expect(fake.queries).toEqual([]);
+  });
   it('appends with one parameter per column per row (18 columns × N events)', async () => {
     const fake = makeFakeSql({ headRows: [] });
     const store = new PostgresEventStore(fake.sql);
@@ -137,9 +196,10 @@ describe('PostgresEventStore against a scripted wire (unit, no database)', () =>
     const params = insert.params ?? [];
     expect(params).toHaveLength(36);
     expect(insert.text).toContain('$36');
-    // jsonb values are bound as serialized JSON strings.
-    expect(params[14]).toBe('{}');
-    expect(params[15]).toBe('{}');
+    // jsonb values are bound as explicit-oid jsonb parameters carrying the
+    // object itself (never pre-stringified text — PG would double-encode it).
+    expect(params[14]).toEqual({ oid: 3802, value: {} });
+    expect(params[15]).toEqual({ oid: 3802, value: {} });
   });
 
   it('rejects a stale expected seq before any INSERT runs', async () => {
@@ -179,6 +239,21 @@ describe('PostgresEventStore against a scripted wire (unit, no database)', () =>
     const projectId = uuidv7();
     await store.append(projectId, [], 3);
     expect(fake.unsafeCalls).toHaveLength(0);
+  });
+
+  it('rethrows a duplicate event identity as event-id-conflict', async () => {
+    const fake = makeFakeSql({
+      headRows: [],
+      unsafeError: Object.assign(
+        new Error('duplicate key value violates unique constraint "project_events_pkey"'),
+        { constraint: 'project_events_pkey' },
+      ),
+    });
+    const store = new PostgresEventStore(fake.sql);
+    const projectId = uuidv7();
+    await expect(store.append(projectId, [envelope(projectId, 1, 1)], 0)).rejects.toThrow(
+      /event-id-conflict/,
+    );
   });
 
   it('rethrows a concurrent-commit unique violation as version-conflict', async () => {
@@ -242,8 +317,8 @@ describe('PostgresEventStore against a scripted wire (unit, no database)', () =>
     expect(q2.params?.[1]).toBe(2);
   });
 
-  it('saves snapshots with serialized jsonb state and idempotent conflict target', async () => {
-    const fake = makeFakeSql();
+  it('saves snapshots with an explicit jsonb state parameter and idempotent conflict target', async () => {
+    const fake = makeFakeSql({ cursorRows: [{ state_version: '2' }] });
     const store = new PostgresEventStore(fake.sql);
     const projectId = uuidv7();
     await store.saveSnapshot(projectId, {
@@ -254,8 +329,9 @@ describe('PostgresEventStore against a scripted wire (unit, no database)', () =>
     });
     const q = fake.queries.find((query) => query.text.includes('INSERT INTO project_snapshots'));
     expect(q).toBeDefined();
-    expect(q?.params?.[3]).toBe(JSON.stringify({ purpose: 'p2', seq: 2 }));
-    expect(String(q?.text)).toContain('ON CONFLICT (project_id, state_version) DO NOTHING');
+    expect(q?.params?.[4]).toEqual({ oid: 3802, value: { purpose: 'p2', seq: 2 } });
+    expect(String(q?.text)).toContain('ON CONFLICT (project_id, seq)');
+    expect(String(q?.text)).toContain('project_snapshots.state = EXCLUDED.state');
   });
 
   it('round-trips driver-shaped rows: int8 strings, jsonb strings, Date instants', async () => {
@@ -275,6 +351,7 @@ describe('PostgresEventStore against a scripted wire (unit, no database)', () =>
     const asString = makeFakeSql({
       snapshotRows: [
         {
+          seq: '2',
           state_version: '2',
           schema_version: '1',
           state: JSON.stringify({ purpose: 'p', seq: 2 }),
@@ -287,7 +364,9 @@ describe('PostgresEventStore against a scripted wire (unit, no database)', () =>
     expect(fromWire?.seq).toBe(2);
 
     const missing = makeFakeSql({
-      snapshotRows: [{ state_version: '1', schema_version: '1', state: { purpose: 'p' } }],
+      snapshotRows: [
+        { seq: '1', state_version: '1', schema_version: '1', state: { purpose: 'p' } },
+      ],
     });
     await expect(new PostgresEventStore(missing.sql).loadSnapshot(projectId)).rejects.toThrow(
       /missing the required seq cursor/,
@@ -325,7 +404,10 @@ describe('runMigrations against a scripted wire (unit, no database)', () => {
       .map((q) => ({ version: q.params?.[0] as string, checksum: q.params?.[1] as string }));
     const again = makeFakeSql({ appliedRows: checksums });
     await runMigrations(again.sql);
-    expect(again.beginCount()).toBe(0);
+    expect(again.unsafeCalls).toHaveLength(0);
+    expect(
+      again.queries.some((query) => query.text.includes('INSERT INTO schema_migrations')),
+    ).toBe(false);
   });
 
   it('fails loudly when an applied migration file changes (checksum drift)', async () => {
@@ -420,13 +502,50 @@ describe('delete-semantics invariants (structural guards, no database)', () => {
     'utf8',
   );
 
-  it('EventStore port exposes exactly the four non-destructive operations — no delete ever', () => {
+  it('EventStore port exposes exactly the five non-destructive operations — no delete ever', () => {
     for (const adapter of [InMemoryEventStore, PostgresEventStore]) {
       const methods = Object.getOwnPropertyNames(adapter.prototype).filter(
         (m) => m !== 'constructor' && m !== 'appendInTransaction',
       );
-      expect(methods.sort()).toEqual(['append', 'loadEvents', 'loadSnapshot', 'saveSnapshot']);
+      expect(methods.sort()).toEqual([
+        'append',
+        'loadEvents',
+        'loadSnapshot',
+        'markRetention',
+        'saveSnapshot',
+      ]);
     }
+  });
+
+  it('markRetention annotates a side table only — the event table is untouched', () => {
+    const body = PostgresEventStore.prototype.markRetention.toString();
+    expect(body).toContain('event_retention_marks');
+    expect(body).not.toContain('DELETE');
+    expect(body).not.toContain('UPDATE project_events');
+  });
+
+  it('markRetention runs one INSERT...SELECT in one transaction and returns inserted seqs', async () => {
+    const fake = makeFakeSql({ markRows: [{ seq: '1' }, { seq: '2' }] });
+    const store = new PostgresEventStore(fake.sql);
+    const projectId = uuidv7();
+    const marked = await store.markRetention(projectId, 1, 5, ARCHIVE);
+    expect(marked).toEqual([1, 2]); // driver rows arrive as int8 strings; mapped + sorted
+    expect(fake.beginCount()).toBe(1); // all-or-nothing: one transaction
+    expect(fake.queries).toHaveLength(1);
+    const insert = fake.queries[0];
+    if (insert === undefined) throw new Error('the INSERT never ran');
+    expect(insert.text).toContain('INSERT INTO event_retention_marks');
+    expect(insert.text).toContain('FROM project_events'); // inner-join discipline
+    expect(insert.text).toContain('ON CONFLICT (project_id, seq) DO NOTHING');
+  });
+
+  it('markRetention with an empty or inverted range returns without touching the wire', async () => {
+    const fake = makeFakeSql({ markRows: [] });
+    const store = new PostgresEventStore(fake.sql);
+    const projectId = uuidv7();
+    await expect(store.markRetention(projectId, 5, 4, PERMANENT)).resolves.toEqual([]);
+    expect(fake.queries).toHaveLength(0);
+    expect(fake.beginCount()).toBe(0);
   });
 
   it('the ledger never retires rows: no tombstone column on project_events', () => {

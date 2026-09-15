@@ -91,6 +91,17 @@ describe('asset lifecycle illegal transitions ', () => {
 });
 
 describe('purge double-condition gate', () => {
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    'refuses an unprovable archived age %s',
+    (daysArchived) => {
+      const result = assertTransition('archived', 'purged' as AssetLifecycle, {
+        daysArchived,
+        doubleConfirmation: true,
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('purge-conditions-unmet');
+    },
+  );
   it('rejects purge at 100 days even with double confirmation', () => {
     const result = assertTransition('archived', 'purged' as AssetLifecycle, {
       daysArchived: 100,
