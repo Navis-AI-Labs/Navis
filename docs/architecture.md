@@ -4,18 +4,18 @@
 
 This document is a reviewable architecture baseline. It defines stable ownership and dependency rules while leaving unresolved business and runtime decisions explicit.
 
-| Area                                                   | Status                                                                                                                                |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Project concept                                        | Defined in the root README                                                                                                            |
-| Repository dependency direction                        | Proposed in ADR-0001                                                                                                                  |
-| Workspace and TypeScript toolchain                     | Proposed in ADR-0002                                                                                                                  |
-| HTTP contract profile                                  | Proposed in ADR-0003 and implemented as a foundation candidate                                                                        |
-| Web, API, Worker, and local integration runtimes       | Deferred by ADR-0004                                                                                                                  |
-| Business domain behavior                               | Domain object model implemented in the r0-kernel-foundation change (archived)                                                         |
-| Domain-kernel storage abstraction                      | Proposed in ADR-0005 and implemented in the r0-kernel-foundation change (ports + adapters)                                            |
-| Causal metadata between concurrent actors              | Proposed in ADR-0006 and implemented in the vector-clock-merge change (clock maintenance, merge detection, conflict marking)          |
-| Clock component retirement safety                      | Constraints proposed in ADR-0007 and accepted in the bidirectional-merge spec; the retirement executor is deferred to a future change |
-| Snapshot capture, restore seam, and strength read path | Active change has code and tests; field admission, replay payload validation, and event-identity uniqueness remain under correction   |
+| Area                                                   | Status                                                                                                                                             |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Project concept                                        | Defined in the root README                                                                                                                         |
+| Repository dependency direction                        | Proposed in ADR-0001                                                                                                                               |
+| Workspace and TypeScript toolchain                     | Proposed in ADR-0002                                                                                                                               |
+| HTTP contract profile                                  | Proposed in ADR-0003 and implemented as a foundation candidate                                                                                     |
+| Web, API, Worker, and local integration runtimes       | Deferred by ADR-0004                                                                                                                               |
+| Business domain behavior                               | Domain object model implemented in the r0-kernel-foundation change (archived)                                                                      |
+| Domain-kernel storage abstraction                      | Proposed in ADR-0005 and implemented in the r0-kernel-foundation change (ports + adapters)                                                         |
+| Causal metadata between concurrent actors              | Proposed in ADR-0006 and implemented in the vector-clock-merge change (clock maintenance, merge detection, conflict marking)                       |
+| Clock component retirement safety                      | Constraints proposed in ADR-0007 and accepted in the bidirectional-merge spec; the retirement executor is deferred to a future change              |
+| Snapshot capture, restore seam, and strength read path | Implemented and archived in snapshot-strength-foundation (ADR-0008) — capture, restore parity, retention marks, and command admission are complete |
 
 ## System context
 
@@ -50,7 +50,7 @@ The future service trust domain owns authoritative Project records, accountable 
 | Application     | Use-case orchestration and output ports                        | Concrete transport, storage, queue, or framework code             |
 | Infrastructure  | Implementations of Domain and Application ports                | New business policy or public contract ownership                  |
 
-Contracts, the Domain object model, the Application capture use case, and the Infrastructure persistence adapters (EventStore port with in-memory and PostgreSQL-wire implementations) are currently activated as source code because an active change gives them concrete consumers and executable requirements. Other boundaries (services, apps) remain architecture, not empty directories.
+Contracts (transport primitives; work-contracts change adds the first business payloads), the Domain object model, the Application capture use case, and the Infrastructure persistence adapters (EventStore port with in-memory and PostgreSQL-wire implementations) are activated as source code because accepted or active changes give them concrete consumers and executable requirements. Other boundaries (services, apps) remain architecture, not empty directories.
 
 ## Compile-time dependency direction
 
@@ -130,13 +130,13 @@ actor intent
 
 Queries may use projections but may not bypass this path to mutate authority. A Worker or local adapter may submit evidence or Candidate material through an authorized use case; it cannot write authoritative state directly.
 
-### Snapshot capture and restore paths (snapshot-strength-foundation)
+### Snapshot capture and restore paths (archived change snapshot-strength-foundation)
 
 Domain owns projection schemas (`state/projection.ts`), snapshot evaluation and restoration checks (`state/snapshot.ts`), and retention advice (`state/strength.ts`). The project-state kernel owns the commands, event history, and replay. These modules have no persistence dependency.
 
 Capture orchestration lives in `application/src/capture/capture-flow.ts` and consumes the Domain EventStore port. Concrete adapters are supplied by the caller, with tests composing the current implementations. Runtime projection schemas live in `domain/src/state/projection.ts`; the kernel, restoration, and strength share their inferred row types and reuse field constraints from the domain schemas. ADR-0008 owns the capture and recovery decisions; the snapshot-strategy specification owns observable behavior.
 
-The single-project aggregate, object schemas, Candidate lifecycle, and Acceptance-to-Delivery gates have implementations. Further review found command inputs, recorded event payloads, and adapter identity rules do not yet share one complete admission contract; the active change tracks their correction. Public command transport, projection-table writers, external effect execution, tenancy, and runtime orchestration remain future boundaries.
+The single-project aggregate, object schemas, Candidate lifecycle, and Acceptance-to-Delivery gates have implementations; command admission, recorded-payload validation, and event-identity uniqueness are corrected and archived. Public command transport, projection-table writers, external effect execution, tenancy, and runtime orchestration remain future boundaries.
 
 ## Public contract boundary
 
@@ -166,7 +166,7 @@ Navis/
 ├── packages/
 │   ├── contracts/          # active foundation candidate
 │   ├── domain/             # active: object model from r0-kernel-foundation
-│   ├── application/        # active: capture use case from snapshot-strength-foundation
+│   ├── application/        # active: capture use case (snapshot-strength-foundation, archived)
 │   └── infrastructure/     # active: EventStore port adapters (in-memory, PostgreSQL wire) from r0-kernel-foundation
 ├── services/
 │   ├── api/                # create after API runtime ADR
