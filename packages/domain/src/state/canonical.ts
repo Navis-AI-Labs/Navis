@@ -9,9 +9,15 @@
  * the parser below makes that a hard failure rather than silent data loss.
  */
 
-/** Serializes a value to canonical JSON (recursively sorted object keys). */
+/** Serializes a value to canonical JSON (recursively sorted object keys).
+ *  Non-finite numbers are a refusal, not a silent null (mirrors the parser). */
 export function canonicalJson(value: unknown): string {
-  return JSON.stringify(sortValue(value));
+  return JSON.stringify(sortValue(value), (_key, v: unknown) => {
+    if (typeof v === 'number' && !Number.isFinite(v)) {
+      throw new Error('canonical JSON cannot carry non-finite numbers');
+    }
+    return v;
+  });
 }
 
 /**
