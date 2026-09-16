@@ -32,7 +32,7 @@ The Contracts package SHALL infer TypeScript wire types from runtime schemas. Ty
 
 ### Requirement: JSON responses use the common transport profile
 
-The Contracts package SHALL provide a success response factory, a cursor-page response factory, and an RFC 9457 Problem Details schema without defining business payloads.
+The Contracts package SHALL provide a success response factory, a cursor-page response factory, and an RFC 9457 Problem Details schema. These transport-profile primitives remain business-neutral; business payloads are defined by the `work-contracts` capability and use these primitives for their wire representation without diluting them.
 
 #### Scenario: a JSON success response is created
 

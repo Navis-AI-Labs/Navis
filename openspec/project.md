@@ -33,9 +33,9 @@ An OpenSpec design must list its selected standards. An implementation task must
 
 ## Current phase
 
-Accepted behavior is organized in ten main specifications. Archived changes establish the toolchain and public transport primitives, domain model and persistence, WorkRun and intervention behavior, causal-clock detection, the closed schema registry, snapshot capture with retention classification, and strength-based retirement suggestions. The Application capture use case is the fourth activated package.
+Accepted behavior is organized in eleven main specifications. Archived changes establish the toolchain and public transport primitives, domain model and persistence, WorkRun and intervention behavior, causal-clock detection, the closed schema registry, snapshot capture with retention classification, strength-based retirement suggestions, and the first business payloads of the Contracts package (Canonical Work Event envelope, public Equip shape, Return submission contract).
 
-The active change is `work-contracts`: the Canonical Work Event envelope, the public Equip contract, and the Return submission contract become the first business payloads of the Contracts package. Only admitted executable responsibilities belong in the code tree; future services and applications remain in `docs/architecture.md` until admitted.
+There is no active change. Only admitted executable responsibilities belong in the code tree; future services and applications remain in `docs/architecture.md` until admitted.
 
 ## Project invariants
 
