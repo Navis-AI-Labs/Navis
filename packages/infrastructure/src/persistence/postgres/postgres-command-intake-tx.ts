@@ -33,7 +33,7 @@ export function createPostgresCommandIntake(sql: postgres.Sql): PostgresCommandI
     dispatch(request, execute) {
       return sql.begin(async (tx) => {
         const inbox = new PostgresCommandInbox(tx);
-        return dispatchCommand(inbox, request, (payload) => execute(tx, payload));
+        return dispatchCommand(inbox, request, (payload: unknown) => execute(tx, payload));
       });
     },
   };
