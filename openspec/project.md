@@ -33,7 +33,7 @@ An OpenSpec design must list its selected standards. An implementation task must
 
 ## Current phase
 
-Accepted behavior is organized in twelve main specifications. Archived changes establish the toolchain and public transport primitives, domain model and persistence, WorkRun and intervention behavior, causal-clock detection, the closed schema registry, snapshot capture with retention classification, strength-based retirement suggestions, and the first business payloads of the Contracts package (Canonical Work Event envelope, public Equip shape, Return submission contract), and the idempotent command intake (claim-or-replay inbox, once-only dispatcher, dual adapters).
+Accepted behavior is organized in twelve main specifications. Archived changes establish the toolchain and public transport primitives, domain model and persistence, WorkRun and intervention behavior, causal-clock detection, the closed schema registry, snapshot capture with retention classification, strength-based retirement suggestions, and the first business payloads of the Contracts package (Canonical Work Event envelope, public Equip shape, Return submission contract), and the idempotent command intake (claim-or-replay inbox, once-only dispatcher, dual adapters), and the five-level asset scope rule now owned by a single domain predicate.
 
 There is no active change. Only admitted executable responsibilities belong in the code tree; future services and applications remain in `docs/architecture.md` until admitted.
 
