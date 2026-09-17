@@ -70,6 +70,9 @@ importers:
 
   packages/infrastructure:
     dependencies:
+      '@navis/application':
+        specifier: workspace:*
+        version: link:../application
       '@navis/domain':
         specifier: workspace:*
         version: link:../domain

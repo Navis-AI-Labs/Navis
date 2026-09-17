@@ -20,7 +20,8 @@
   },
   "dependencies": {
     "@navis/domain": "workspace:*",
-    "postgres": "3.4.7"
+    "postgres": "3.4.7",
+    "@navis/application": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "24.13.3"
