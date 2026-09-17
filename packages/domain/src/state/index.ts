@@ -8,6 +8,7 @@ export {
 export { advanceClock, compareClocks, mergeClocks } from './vector-clock.js';
 export type { ClockSnapshot, ClockVerdict } from './vector-clock.js';
 export { EventHistory } from './event-history.js';
+export { scopeVisibleForProject } from './scope-visibility.js';
 export { stateEventSchema, type StateEvent } from './events.js';
 export {
   COMPETITIVE_GRACE_PERIOD_DAYS,

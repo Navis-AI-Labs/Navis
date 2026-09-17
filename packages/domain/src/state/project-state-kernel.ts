@@ -20,6 +20,7 @@ import { canonicalEquals, deepFreeze, immutableCopy } from './canonical.js';
 import { EventHistory, verifyEventHistory } from './event-history.js';
 import type { StateEvent } from './events.js';
 import { parseEventData } from './event-data.js';
+import { scopeVisibleForProject } from './scope-visibility.js';
 import { extractProjectionState, validateSnapshotUsability } from './snapshot.js';
 import type { ProjectionSnapshot } from '../ports/event-store.js';
 import { kernelErrors, type KernelError } from '../errors/kernel.js';
@@ -2064,7 +2065,7 @@ export class ProjectStateKernel {
     if (participantGuard !== undefined) return participantGuard;
     const version = this.stateVersion;
     const verifiedFacts = Object.values(this.#draft.assets)
-      .filter((a) => alive(a) && a.scope === 'project' && a.lifecycle === 'active')
+      .filter((a) => alive(a) && scopeVisibleForProject(a.scope) && a.lifecycle === 'active')
       .map((a) => a.id);
     const serialized = new TextEncoder().encode(JSON.stringify(verifiedFacts)).length;
     if (serialized > EQUIP_SIZE_BUDGET) {
@@ -2110,7 +2111,7 @@ export class ProjectStateKernel {
         .filter(
           (a) =>
             alive(a) &&
-            a.scope === 'project' &&
+            scopeVisibleForProject(a.scope) &&
             (a.lifecycle === 'active' || a.lifecycle === 'candidate'),
         )
         .map((a) => a.id),
