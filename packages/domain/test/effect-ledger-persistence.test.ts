@@ -55,6 +55,14 @@ describe('listPendingEffects', () => {
     const k = seed();
     const a = intent(k, 'a');
     valueOf(
+      k.beginEffectExecution({
+        actor: HUMAN,
+        at: T0,
+        effect_id: a,
+        expected_version: k.stateVersion,
+      }),
+    );
+    valueOf(
       k.closeEffect({
         actor: HUMAN,
         at: T0,
@@ -69,6 +77,14 @@ describe('listPendingEffects', () => {
   it('failed effects are also dropped (not pending)', () => {
     const k = seed();
     const a = intent(k, 'a');
+    valueOf(
+      k.beginEffectExecution({
+        actor: HUMAN,
+        at: T0,
+        effect_id: a,
+        expected_version: k.stateVersion,
+      }),
+    );
     valueOf(
       k.closeEffect({
         actor: HUMAN,
@@ -101,6 +117,14 @@ describe('listPendingEffects', () => {
     const k = seed();
     const a = intent(k, 'a');
     const b = intent(k, 'b');
+    valueOf(
+      k.beginEffectExecution({
+        actor: HUMAN,
+        at: T0,
+        effect_id: a,
+        expected_version: k.stateVersion,
+      }),
+    );
     valueOf(
       k.closeEffect({
         actor: HUMAN,

@@ -163,6 +163,14 @@ function buildMixedLog(): StateEvent[] {
           }),
         );
         must(
+          k.beginEffectExecution({
+            actor: HUMAN,
+            at,
+            effect_id: effect.id,
+            expected_version: k.stateVersion,
+          }),
+        );
+        must(
           k.closeEffect({
             actor: HUMAN,
             at,

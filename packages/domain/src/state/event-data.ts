@@ -273,6 +273,16 @@ const schemas: Readonly<Record<string, z.ZodType>> = {
     actor,
     reason: reason.optional(),
   }),
+  'effect.execution_begun': z.strictObject({
+    effect_id: uuid,
+    actor,
+  }),
+  'effect.execution_reset': z.strictObject({
+    effect_id: uuid,
+    actor,
+    reason: textSchema,
+    attempts_next: z.number().int().min(1),
+  }),
   'delivery.recorded': z.strictObject({
     delivery_id: uuid,
     asset_id: uuid,

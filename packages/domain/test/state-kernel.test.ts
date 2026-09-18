@@ -803,6 +803,12 @@ describe('kernel: effect ledger + delivery gate order (T21)', () => {
       'unknown-effect-unclosed',
     );
     // confirmed-as-failed closure unblocks: closure is not success
+    k.beginEffectExecution({
+      actor: human,
+      at: T0,
+      effect_id: effectId,
+      expected_version: k.stateVersion,
+    });
     k.closeEffect({
       actor: human,
       at: T0,
@@ -1971,6 +1977,12 @@ describe('kernel: optional-field matrix', () => {
         expected_version: 0,
       }),
     ).id;
+    k.beginEffectExecution({
+      actor: human,
+      at: T0,
+      effect_id: ef,
+      expected_version: 0,
+    });
     k.closeEffect({
       actor: human,
       at: T0,

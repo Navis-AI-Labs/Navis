@@ -153,7 +153,9 @@ const effectRowSchema = z.strictObject({
   intent_key: z.string().min(1).max(512).optional(),
   asset_ref: uuidSchema.optional(),
   description: textSchema.optional(),
-  status: z.enum(['unknown', 'confirmed', 'failed']),
+  status: z.enum(['unknown', 'executing', 'confirmed', 'failed']),
+  // Monotone across all epochs; each resetEffectExecution retries adds one.
+  execution_attempts: z.number().int().min(0).optional(),
   closed_at: instantSchema.optional(),
   // Stamped by cancelEffectLate; afterwards closeEffect refuses to confirm.
   late_cancel_received: z.boolean().optional(),

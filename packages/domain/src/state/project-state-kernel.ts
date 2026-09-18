@@ -104,6 +104,8 @@ export const KERNEL_EVENT_TYPES = [
   'effect.intent_recorded',
   'effect.closed',
   'effect.cancel_recorded',
+  'effect.execution_begun',
+  'effect.execution_reset',
   'delivery.recorded',
   'delivery.confirmed',
   'direction.proposed',
@@ -684,6 +686,17 @@ function applyEvent(d: MutableProjection, e: StateEvent): void {
       ef.late_cancel_received = true;
       break;
     }
+    case 'effect.execution_begun': {
+      const ef = must(d.effects[data['effect_id'] as string], 'effect');
+      ef.status = 'executing';
+      break;
+    }
+    case 'effect.execution_reset': {
+      const ef = must(d.effects[data['effect_id'] as string], 'effect');
+      ef.status = 'unknown';
+      ef.execution_attempts = data['attempts_next'] as number;
+      break;
+    }
     case 'delivery.recorded': {
       d.deliveries[data['delivery_id'] as string] = {
         id: data['delivery_id'] as string,
@@ -865,6 +878,8 @@ function applyEvent(d: MutableProjection, e: StateEvent): void {
     case 'effect.intent_recorded':
     case 'effect.closed':
     case 'effect.cancel_recorded':
+    case 'effect.execution_begun':
+    case 'effect.execution_reset':
       touch(d.effects[data['effect_id'] as string]);
       break;
     case 'delivery.recorded':
@@ -1104,6 +1119,21 @@ export interface RecordEffectCommand {
   readonly expected_version: number;
 }
 
+export interface BeginEffectExecutionCommand {
+  readonly actor: string;
+  readonly at: string;
+  readonly effect_id: string;
+  readonly expected_version: number;
+}
+
+export interface ResetEffectExecutionCommand {
+  readonly actor: string;
+  readonly at: string;
+  readonly effect_id: string;
+  readonly reason: string;
+  readonly expected_version: number;
+}
+
 export interface CloseEffectCommand {
   readonly actor: string;
   readonly at: string;
@@ -1252,6 +1282,11 @@ export class ProjectStateKernel {
    */
   listPendingEffects(): readonly EffectRow[] {
     return Object.values(this.#draft.effects).filter((e) => alive(e) && e.status === 'unknown');
+  }
+
+  /** Effects begun but not yet closed — the crash-recovery window. */
+  listExecutingEffects(): readonly EffectRow[] {
+    return Object.values(this.#draft.effects).filter((e) => alive(e) && e.status === 'executing');
   }
 
   /** Tamper probe: history integrity AND live-vs-rebuilt canonical identity. */
@@ -2065,9 +2100,100 @@ export class ProjectStateKernel {
   }
 
   /**
-   * Close an effect: unknown→confirmed (it happened) or unknown→failed
-   * (it did not). Closure is not success — the ledger equals reality
-   * either way; both close states unblock delivery.
+   * Begin execution: unknown → executing. The nibble of facts for the
+   * lifecycle gets its first bump here: calling closeEffect later is
+   * legal only while in this state. Calling it twice is refused.
+   */
+  beginEffectExecution(cmd: BeginEffectExecutionCommand): KernelResult<EffectRow> {
+    const gate = this.#guardPreconditions(
+      cmd.expected_version,
+      'begin_effect_execution',
+      cmd.actor,
+      null,
+      false,
+    );
+    if (!gate.ok) return gate;
+    const invalid = invalidFields('begin_effect_execution', [
+      ['at', instantSchema, cmd.at],
+      ['effect_id', uuidv7Schema, cmd.effect_id],
+    ]);
+    if (invalid !== undefined) return { ok: false, error: invalid };
+    const ef = this.#draft.effects[cmd.effect_id];
+    if (ef === undefined || !alive(ef)) {
+      return {
+        ok: false,
+        error: kernelErrors.forbidden('begin_effect_execution', { reason: 'effect-not-found' }),
+      };
+    }
+    if (ef.status !== 'unknown') {
+      return {
+        ok: false,
+        error: kernelErrors.forbidden('begin_effect_execution', {
+          reason: 'effect-not-unknown',
+          status: ef.status,
+        }),
+      };
+    }
+    this.#append('effect.execution_begun', cmd.at, cmd.actor, {
+      effect_id: cmd.effect_id,
+      actor: cmd.actor,
+    });
+    return success(this.#draft.effects[cmd.effect_id] as EffectRow);
+  }
+
+  /**
+   * Reset execution: executing → unknown, with one attempt bump in the
+   * row's `execution_attempts` counter (recorded in the event payload
+   * as `attempts_next`). Crash-restart runners call this before they
+   * re-drive the effect. Calling this on any non-executing row is
+   * forbidden — the ledger keeps an exact history of crossing paths.
+   */
+  resetEffectExecution(cmd: ResetEffectExecutionCommand): KernelResult<EffectRow> {
+    const gate = this.#guardPreconditions(
+      cmd.expected_version,
+      'reset_effect_execution',
+      cmd.actor,
+      null,
+      false,
+    );
+    if (!gate.ok) return gate;
+    const invalid = invalidFields('reset_effect_execution', [
+      ['at', instantSchema, cmd.at],
+      ['effect_id', uuidv7Schema, cmd.effect_id],
+      ['reason', textSchema, cmd.reason],
+    ]);
+    if (invalid !== undefined) return { ok: false, error: invalid };
+    const ef = this.#draft.effects[cmd.effect_id];
+    if (ef === undefined || !alive(ef)) {
+      return {
+        ok: false,
+        error: kernelErrors.forbidden('reset_effect_execution', { reason: 'effect-not-found' }),
+      };
+    }
+    if (ef.status !== 'executing') {
+      return {
+        ok: false,
+        error: kernelErrors.forbidden('reset_effect_execution', {
+          reason: 'effect-not-executing',
+          status: ef.status,
+        }),
+      };
+    }
+    const attempts_next = (ef.execution_attempts ?? 0) + 1;
+    this.#append('effect.execution_reset', cmd.at, cmd.actor, {
+      effect_id: cmd.effect_id,
+      actor: cmd.actor,
+      reason: cmd.reason,
+      attempts_next,
+    });
+    return success(this.#draft.effects[cmd.effect_id] as EffectRow);
+  }
+
+  /**
+   * Close an effect: executing → confirmed/failed. Closure is terminal:
+   * the row returns to no caller once closed. Closures directly from
+   * unknown are refused (that would silently claim a side effect that
+   * never began). Late-cancelled rows may only settle as failed.
    */
   closeEffect(cmd: CloseEffectCommand): KernelResult<EffectRow> {
     const gate = this.#guardPreconditions(
@@ -2092,7 +2218,16 @@ export class ProjectStateKernel {
         error: kernelErrors.forbidden('close_effect', { reason: 'effect-not-found' }),
       };
     }
-    if (ef.status !== 'unknown') {
+    // execution-recovery door: closing must come from executing.
+    // Unknown rows went through intent-only; closed rows — keep the legacy
+    // already-closed reason while we always detect them first.
+    if (ef.status === 'unknown') {
+      return {
+        ok: false,
+        error: kernelErrors.forbidden('close_effect', { reason: 'effect-not-executing' }),
+      };
+    }
+    if (ef.status === 'confirmed' || ef.status === 'failed') {
       return {
         ok: false,
         error: kernelErrors.forbidden('close_effect', {
@@ -2101,12 +2236,14 @@ export class ProjectStateKernel {
         }),
       };
     }
-    if (ef.late_cancel_received === true) {
+    // Late-cancelled executing rows may still settle, but only as failed.
+    if (ef.late_cancel_received === true && cmd.outcome === 'confirmed') {
       return {
         ok: false,
         error: kernelErrors.forbidden('close_effect', { reason: 'effect-cancelled' }),
       };
     }
+    // (close with outcome 'failed' proceeds)
     this.#append('effect.closed', cmd.at, cmd.actor, {
       effect_id: cmd.effect_id,
       outcome: cmd.outcome,
@@ -2192,7 +2329,9 @@ export class ProjectStateKernel {
         error: kernelErrors.forbidden('cancel_effect_late', { reason: 'effect-not-found' }),
       };
     }
-    if (ef.status !== 'unknown') {
+    // Late cancel also applies mid-execution (the runner has the stamp
+    // trigger from mesh/cancel); only terminal rows are refused.
+    if (ef.status === 'confirmed' || ef.status === 'failed') {
       return {
         ok: false,
         error: kernelErrors.forbidden('cancel_effect_late', {

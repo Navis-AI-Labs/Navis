@@ -106,6 +106,14 @@ describe('intent-first ledger', () => {
       }),
     );
     valueOf(
+      k.beginEffectExecution({
+        actor: HUMAN,
+        at: T0,
+        effect_id: row.id,
+        expected_version: k.stateVersion,
+      }),
+    );
+    valueOf(
       k.closeEffect({
         actor: HUMAN,
         at: T0,
@@ -171,6 +179,14 @@ describe('late cancel', () => {
         expected_version: k.stateVersion,
       }),
     );
+    valueOf(
+      k.beginEffectExecution({
+        actor: HUMAN,
+        at: T0,
+        effect_id: row.id,
+        expected_version: k.stateVersion,
+      }),
+    );
     const r = k.closeEffect({
       actor: HUMAN,
       at: T0,
@@ -192,6 +208,14 @@ describe('late cancel', () => {
         actor: HUMAN,
         at: T0,
         intent_key: 'closed-then-late-cancel',
+        expected_version: k.stateVersion,
+      }),
+    );
+    valueOf(
+      k.beginEffectExecution({
+        actor: HUMAN,
+        at: T0,
+        effect_id: row.id,
         expected_version: k.stateVersion,
       }),
     );
@@ -270,6 +294,14 @@ describe('late cancel on a bare recordEffect row (backwards compatibility)', () 
         expected_version: k.stateVersion,
       }),
     );
+    valueOf(
+      k.beginEffectExecution({
+        actor: HUMAN,
+        at: T0,
+        effect_id: row.id,
+        expected_version: k.stateVersion,
+      }),
+    );
     const attempt = k.closeEffect({
       actor: HUMAN,
       at: T0,
@@ -338,6 +370,14 @@ describe('late cancel on a bare recordEffect row (backwards compatibility)', () 
         k.recordEffect({ actor: HUMAN, at: T0, expected_version: k.stateVersion }),
       );
       expect(row.status).toBe('unknown');
+      valueOf(
+        k.beginEffectExecution({
+          actor: HUMAN,
+          at: T0,
+          effect_id: row.id,
+          expected_version: k.stateVersion,
+        }),
+      );
       const cl = valueOf(
         k.closeEffect({
           actor: HUMAN,
