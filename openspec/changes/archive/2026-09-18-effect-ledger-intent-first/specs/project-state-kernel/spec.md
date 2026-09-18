@@ -1,6 +1,6 @@
 # Delta: project-state-kernel — effect ledger intent-first
 
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: the effect ledger is authoritative for side-effect facts
 
