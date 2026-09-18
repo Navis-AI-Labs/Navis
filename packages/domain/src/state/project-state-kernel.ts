@@ -1055,6 +1055,9 @@ export interface RegisterHoldCommand {
   readonly statement: string;
   readonly blocks_delivery?: boolean;
   readonly asset_refs?: readonly string[];
+  // Attribution: the work this hold was raised for. Holds without it are
+  // project-wide and appear in every equip (see the equip derivation rule).
+  readonly registered_during_work?: string;
   readonly expected_version: number;
 }
 
@@ -1857,6 +1860,7 @@ export class ProjectStateKernel {
       ['statement', textSchema, cmd.statement],
       ['blocks_delivery', z.boolean().optional(), cmd.blocks_delivery],
       ['asset_refs', uuidListSchema.optional(), cmd.asset_refs],
+      ['registered_during_work', uuidv7Schema.optional(), cmd.registered_during_work],
     ]);
     if (typeof cmd.statement === 'string' && cmd.statement.trim().length === 0) {
       return { ok: false, error: kernelErrors.rationaleRequired('register_hold') };
@@ -1893,6 +1897,9 @@ export class ProjectStateKernel {
       registered_by: cmd.actor,
       actor: cmd.actor,
       ...(cmd.asset_refs === undefined ? {} : { asset_refs: [...cmd.asset_refs] }),
+      ...(cmd.registered_during_work === undefined
+        ? {}
+        : { registered_during_work: cmd.registered_during_work }),
     });
     return success(this.#draft.holds[holdId] as HoldRow);
   }
@@ -2115,8 +2122,17 @@ export class ProjectStateKernel {
             (a.lifecycle === 'active' || a.lifecycle === 'candidate'),
         )
         .map((a) => a.id),
+      // Work-scoped narrow: unattributed holds are project-wide and still
+      // bind every work; verified_facts stay project-wide (assets carry
+      // no per-work attribution, so narrowing them would fabricate data).
       active_holds: Object.values(this.#draft.holds)
-        .filter((h) => alive(h) && h.status === 'active')
+        .filter(
+          (h) =>
+            alive(h) &&
+            h.status === 'active' &&
+            (h.registered_during_work === undefined ||
+              (cmd.work_id !== undefined && h.registered_during_work === cmd.work_id)),
+        )
         .map((h) => h.id),
       ...(p.boundary === undefined ? {} : { boundary: p.boundary }),
       ...(p.acceptance_criteria === undefined
@@ -2695,11 +2711,19 @@ export class ProjectStateKernel {
         error: kernelErrors.versionConflict(cmd.expected_version, project.current_state_version),
       };
     }
+    // Closed works (tombstoned, completed, cancelled) cannot start runs.
+    // This guard must precede equip evaluation so that order-of-checks
+    // never changes the outcome.
     const targetWork = this.#draft.works[cmd.work_id];
-    if (targetWork === undefined || !alive(targetWork) || targetWork.status === 'cancelled') {
+    if (
+      targetWork === undefined ||
+      !alive(targetWork) ||
+      targetWork.status === 'cancelled' ||
+      targetWork.status === 'completed'
+    ) {
       return {
         ok: false,
-        error: kernelErrors.forbidden('start_run', { reason: 'work-not-found' }),
+        error: kernelErrors.forbidden('start_run', { reason: 'work-closed' }),
       };
     }
     if (this.#draft.work_runs[cmd.run_id] !== undefined) {
