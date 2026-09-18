@@ -1243,6 +1243,17 @@ export class ProjectStateKernel {
     return a;
   }
 
+  /**
+   * The pending-recovery predicate: every effect that has been heard of
+   * but not yet settled to confirmed/failed. Unknown-status rows stay
+   * recoverable even when a late cancel has been recorded — the late
+   * cancel only closes off the 'confirm' path, it does not settle the
+   * underlying intent.
+   */
+  listPendingEffects(): readonly EffectRow[] {
+    return Object.values(this.#draft.effects).filter((e) => alive(e) && e.status === 'unknown');
+  }
+
   /** Tamper probe: history integrity AND live-vs-rebuilt canonical identity. */
   verifyIntegrity(): { ok: true } | { ok: false; reason: string } {
     const rebuilt = deepFreeze(this.rebuildProjection());
