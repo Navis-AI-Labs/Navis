@@ -2122,9 +2122,8 @@ export class ProjectStateKernel {
             (a.lifecycle === 'active' || a.lifecycle === 'candidate'),
         )
         .map((a) => a.id),
-      // Work-scoped narrow: unattributed holds are project-wide and still
-      // bind every work; verified_facts stay project-wide (assets carry
-      // no per-work attribution, so narrowing them would fabricate data).
+      // Unattributed holds are project-wide and bind every work; narrowing the
+      // filter must never silence them.
       active_holds: Object.values(this.#draft.holds)
         .filter(
           (h) =>
@@ -2711,9 +2710,8 @@ export class ProjectStateKernel {
         error: kernelErrors.versionConflict(cmd.expected_version, project.current_state_version),
       };
     }
-    // Closed works (tombstoned, completed, cancelled) cannot start runs.
-    // This guard must precede equip evaluation so that order-of-checks
-    // never changes the outcome.
+    // Guard first: closed works (tombstoned/completed/cancelled) — result must not
+    // depend on order-of-evaluation with equip checks.
     const targetWork = this.#draft.works[cmd.work_id];
     if (
       targetWork === undefined ||
