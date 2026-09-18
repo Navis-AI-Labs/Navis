@@ -149,10 +149,14 @@ const deliveryRowSchema = z.strictObject({
 const effectRowSchema = z.strictObject({
   ...replayFields,
   id: uuidSchema,
+  // Set only on the intent-first ledger path; unique across rows.
+  intent_key: z.string().min(1).max(512).optional(),
   asset_ref: uuidSchema.optional(),
   description: textSchema.optional(),
   status: z.enum(['unknown', 'confirmed', 'failed']),
   closed_at: instantSchema.optional(),
+  // Stamped by cancelEffectLate; afterwards closeEffect refuses to confirm.
+  late_cancel_received: z.boolean().optional(),
 });
 
 const equipRowSchema = z.strictObject({

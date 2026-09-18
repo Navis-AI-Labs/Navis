@@ -101,7 +101,9 @@ export const KERNEL_EVENT_TYPES = [
   'return.rejected',
   'return.conflict_marked',
   'effect.recorded',
+  'effect.intent_recorded',
   'effect.closed',
+  'effect.cancel_recorded',
   'delivery.recorded',
   'delivery.confirmed',
   'direction.proposed',
@@ -654,10 +656,32 @@ function applyEvent(d: MutableProjection, e: StateEvent): void {
       };
       break;
     }
+    case 'effect.intent_recorded': {
+      // Intent-first ledger: the row is created with status 'unknown' the
+      // same way as a bare recordEffect, but its identity is bound to the
+      // caller-supplied intent_key so idempotent retries converge on the
+      // same row (and only one event is ever appended for a given key).
+      d.effects[data['effect_id'] as string] = {
+        id: data['effect_id'] as string,
+        intent_key: data['intent_key'] as string,
+        ...(data['asset_ref'] === undefined ? {} : { asset_ref: data['asset_ref'] as string }),
+        ...(data['description'] === undefined
+          ? {}
+          : { description: data['description'] as string }),
+        status: 'unknown',
+        created_at: e.at,
+      };
+      break;
+    }
     case 'effect.closed': {
       const ef = must(d.effects[data['effect_id'] as string], 'effect');
       ef.status = data['outcome'] as EffectRow['status'];
       ef.closed_at = e.at;
+      break;
+    }
+    case 'effect.cancel_recorded': {
+      const ef = must(d.effects[data['effect_id'] as string], 'effect');
+      ef.late_cancel_received = true;
       break;
     }
     case 'delivery.recorded': {
@@ -838,7 +862,9 @@ function applyEvent(d: MutableProjection, e: StateEvent): void {
       touch(d.holds[data['hold_id'] as string]);
       break;
     case 'effect.recorded':
+    case 'effect.intent_recorded':
     case 'effect.closed':
+    case 'effect.cancel_recorded':
       touch(d.effects[data['effect_id'] as string]);
       break;
     case 'delivery.recorded':
@@ -1083,6 +1109,33 @@ export interface CloseEffectCommand {
   readonly at: string;
   readonly effect_id: string;
   readonly outcome: 'confirmed' | 'failed';
+  readonly reason?: string;
+  readonly expected_version: number;
+}
+
+/**
+ * Intent-first ledger admission. The intent key is the caller-supplied
+ * identity of the business action; re-recording the same key returns the
+ * already-recorded row and appends zero events.
+ */
+export interface RecordEffectIntentCommand {
+  readonly actor: string;
+  readonly at: string;
+  readonly intent_key: string;
+  readonly asset_ref?: string;
+  readonly description?: string;
+  readonly expected_version: number;
+}
+
+/**
+ * Late cancel: the side effect already ran but a cancel signal arrived
+ * afterwards. The ledger marks the row as late_cancel_received — the row
+ * cannot be closed as confirmed/failed afterwards.
+ */
+export interface CancelEffectLateCommand {
+  readonly actor: string;
+  readonly at: string;
+  readonly effect_id: string;
   readonly reason?: string;
   readonly expected_version: number;
 }
@@ -2037,9 +2090,116 @@ export class ProjectStateKernel {
         }),
       };
     }
+    if (ef.late_cancel_received === true) {
+      return {
+        ok: false,
+        error: kernelErrors.forbidden('close_effect', { reason: 'effect-cancelled' }),
+      };
+    }
     this.#append('effect.closed', cmd.at, cmd.actor, {
       effect_id: cmd.effect_id,
       outcome: cmd.outcome,
+      actor: cmd.actor,
+      ...(cmd.reason === undefined ? {} : { reason: cmd.reason }),
+    });
+    return success(this.#draft.effects[cmd.effect_id] as EffectRow);
+  }
+
+  /**
+   * Intent-first ledger admission. Replays of the same intent key return
+   * the already-recorded row without appending an event, so duplicates
+   * collapse to a single ledger row. The row's status starts as unknown.
+   */
+  recordEffectIntent(cmd: RecordEffectIntentCommand): KernelResult<EffectRow> {
+    const gate = this.#guardPreconditions(
+      cmd.expected_version,
+      'record_effect_intent',
+      cmd.actor,
+      null,
+      false,
+    );
+    if (!gate.ok) return gate;
+    const invalid = invalidFields('record_effect_intent', [
+      ['at', instantSchema, cmd.at],
+      ['intent_key', z.string().min(1).max(512), cmd.intent_key],
+      ['asset_ref', uuidv7Schema.optional(), cmd.asset_ref],
+      ['description', textSchema.optional(), cmd.description],
+    ]);
+    if (invalid !== undefined) return { ok: false, error: invalid };
+    const existing = Object.values(this.#draft.effects).find(
+      (e) => alive(e) && e.intent_key === cmd.intent_key,
+    );
+    if (existing !== undefined) {
+      if (existing.status === 'unknown') {
+        return success(existing);
+      }
+      return {
+        ok: false,
+        error: kernelErrors.forbidden('record_effect_intent', {
+          reason: 'intent-key-already-closed',
+          effect_id: existing.id,
+          status: existing.status,
+        }),
+      };
+    }
+    const effectId = uuidv7();
+    this.#append('effect.intent_recorded', cmd.at, cmd.actor, {
+      effect_id: effectId,
+      intent_key: cmd.intent_key,
+      actor: cmd.actor,
+      ...(cmd.asset_ref === undefined ? {} : { asset_ref: cmd.asset_ref }),
+      ...(cmd.description === undefined ? {} : { description: cmd.description }),
+    });
+    return success(this.#draft.effects[effectId] as EffectRow);
+  }
+
+  /**
+   * Late cancel folds the row to unknown and stamps late_cancel_received.
+   * The row is then permanently rejectable by closeEffect — a late-cancel
+   * can never be promoted to confirmed/failed, so no downstream gate
+   * (delivery, acceptance) can silently treat it as completed work.
+   */
+  cancelEffectLate(cmd: CancelEffectLateCommand): KernelResult<EffectRow> {
+    const gate = this.#guardPreconditions(
+      cmd.expected_version,
+      'cancel_effect_late',
+      cmd.actor,
+      cmd.reason ?? null,
+      false,
+    );
+    if (!gate.ok) return gate;
+    const invalid = invalidFields('cancel_effect_late', [
+      ['at', instantSchema, cmd.at],
+      ['effect_id', uuidv7Schema, cmd.effect_id],
+      ['reason', textSchema.optional(), cmd.reason],
+    ]);
+    if (invalid !== undefined) return { ok: false, error: invalid };
+    const ef = this.#draft.effects[cmd.effect_id];
+    if (ef === undefined || !alive(ef)) {
+      return {
+        ok: false,
+        error: kernelErrors.forbidden('cancel_effect_late', { reason: 'effect-not-found' }),
+      };
+    }
+    if (ef.status !== 'unknown') {
+      return {
+        ok: false,
+        error: kernelErrors.forbidden('cancel_effect_late', {
+          reason: 'effect-already-closed',
+          status: ef.status,
+        }),
+      };
+    }
+    if (ef.late_cancel_received === true) {
+      return {
+        ok: false,
+        error: kernelErrors.forbidden('cancel_effect_late', {
+          reason: 'late-cancel-already-recorded',
+        }),
+      };
+    }
+    this.#append('effect.cancel_recorded', cmd.at, cmd.actor, {
+      effect_id: cmd.effect_id,
       actor: cmd.actor,
       ...(cmd.reason === undefined ? {} : { reason: cmd.reason }),
     });

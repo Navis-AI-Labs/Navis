@@ -255,9 +255,21 @@ const schemas: Readonly<Record<string, z.ZodType>> = {
     asset_ref: uuid.optional(),
     description: textSchema.optional(),
   }),
+  'effect.intent_recorded': z.strictObject({
+    effect_id: uuid,
+    intent_key: z.string().min(1).max(512),
+    actor,
+    asset_ref: uuid.optional(),
+    description: textSchema.optional(),
+  }),
   'effect.closed': z.strictObject({
     effect_id: uuid,
     outcome: z.enum(['confirmed', 'failed']),
+    actor,
+    reason: reason.optional(),
+  }),
+  'effect.cancel_recorded': z.strictObject({
+    effect_id: uuid,
     actor,
     reason: reason.optional(),
   }),
