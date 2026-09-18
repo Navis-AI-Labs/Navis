@@ -1172,6 +1172,24 @@ export class ProjectStateKernel {
     return this.#history.all();
   }
 
+  /**
+   * Read surface (minimal, R0): the only way to read assets from the
+   * kernel. Both paths route through the same scope predicate used by
+   * equip derivation — a caller must not be able to distinguish
+   * "out of scope" from "absent".
+   */
+  listAssets(): readonly AssetRow[] {
+    return Object.values(this.#draft.assets).filter(
+      (a) => alive(a) && scopeVisibleForProject(a.scope),
+    );
+  }
+
+  getAssetById(id: string): AssetRow | undefined {
+    const a = this.#draft.assets[id];
+    if (a === undefined || !alive(a) || !scopeVisibleForProject(a.scope)) return undefined;
+    return a;
+  }
+
   /** Tamper probe: history integrity AND live-vs-rebuilt canonical identity. */
   verifyIntegrity(): { ok: true } | { ok: false; reason: string } {
     const rebuilt = deepFreeze(this.rebuildProjection());
