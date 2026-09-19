@@ -68,3 +68,10 @@ export {
   UnsupportedWorkEventVersionError,
   type CanonicalWorkEvent,
 } from './work-event.js';
+
+export {
+  bridgeHookInvocationSchema,
+  bridgeHookResultSchema,
+  type BridgeHookInvocation,
+  type BridgeHookResult,
+} from './bridge-hook.js';
