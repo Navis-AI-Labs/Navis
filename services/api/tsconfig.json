@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "tsBuildInfoFile": "./dist/api.tsbuildinfo",
+    "types": ["node"]
+  },
+  "references": [
+    {
+      "path": "../../packages/contracts"
+    }
+  ],
+  "include": ["src/**/*.ts"],
+  "exclude": ["test/**/*.ts"]
+}

@@ -6,7 +6,13 @@ import {
   projectionSnapshotSchema,
   retentionClassSchema,
 } from '@navis/domain';
-import type { EventEnvelope, EventStore, ProjectionSnapshot, RetentionClass } from '@navis/domain';
+import type {
+  EventEnvelope,
+  EventIdentity,
+  EventStore,
+  ProjectionSnapshot,
+  RetentionClass,
+} from '@navis/domain';
 
 /**
  * In-memory EventStore: same port, no database — behavior tests run
@@ -18,7 +24,13 @@ export class InMemoryEventStore implements EventStore {
   private readonly snapshots = new Map<string, Map<number, ProjectionSnapshot>>();
   // key: `${projectId}:${seq}` — mirrors event_retention_marks semantics
   private readonly marks = new Map<string, RetentionClass>();
-  private readonly eventIds = new Map<string, string>();
+  private readonly eventIds = new Map<string, { projectId: string; deviceId: string | null }>();
+
+  /** The device that authored a stored event, when the envelope recorded one. */
+  private static deviceOf(event: EventEnvelope): string | null {
+    const value = event.metadata['device_id'];
+    return typeof value === 'string' ? value : null;
+  }
 
   async append(
     projectId: string,
@@ -59,7 +71,7 @@ export class InMemoryEventStore implements EventStore {
     // stream here either (adapter parity for the immutability contract).
     for (const e of owned) {
       stream.push(e);
-      this.eventIds.set(e.event_id, projectId);
+      this.eventIds.set(e.event_id, { projectId, deviceId: InMemoryEventStore.deviceOf(e) });
       if (eventRetentionClass(e.event_type) === 'permanent') {
         this.marks.set(`${projectId}:${String(e.seq)}`, 'permanent');
       }
@@ -129,5 +141,27 @@ export class InMemoryEventStore implements EventStore {
       .map((event) => event.seq);
     for (const seq of toMark) this.marks.set(`${projectId}:${String(seq)}`, retentionClass);
     return toMark;
+  }
+
+  async headSeq(projectId: string): Promise<number> {
+    await Promise.resolve();
+    const stream = this.streams.get(projectId);
+    const last = stream?.[stream.length - 1];
+    return last === undefined ? 0 : last.seq;
+  }
+
+  async existingEventIdentities(
+    projectId: string,
+    eventIds: readonly string[],
+  ): Promise<readonly EventIdentity[]> {
+    await Promise.resolve();
+    const wanted = new Set(eventIds);
+    const found: EventIdentity[] = [];
+    for (const [eventId, ownership] of this.eventIds) {
+      if (ownership.projectId === projectId && wanted.has(eventId)) {
+        found.push({ event_id: eventId, device_id: ownership.deviceId });
+      }
+    }
+    return found;
   }
 }

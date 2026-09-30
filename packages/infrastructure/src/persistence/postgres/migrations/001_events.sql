@@ -402,3 +402,129 @@ WHERE event_type NOT IN (
   'workrun.transitioned'
 )
 ON CONFLICT (project_id, seq) DO NOTHING;
+
+-- ============ device authentication and project membership ============
+--
+-- The authority chain:
+--
+--   device key -> device -> participant -> project_members -> project
+--
+-- A request authenticates at the left (who + which machine) and authorizes at
+-- the right (what this project admits). Deny is the default; the membership
+-- row is the only grant. Membership is binary -- a member or not -- and the
+-- descriptive `role` on participants is unenforced here so a future change
+-- can activate it without a wire change.
+--
+-- Key material is a one-way verifier only (sha256, constant-time compare in
+-- the adapter); no plaintext secret is ever persisted. Revocation is
+-- immediate and unconditional: `revoked_at` flips and the very next request
+-- with that key fails before any business logic runs -- no grace period.
+
+CREATE TABLE IF NOT EXISTS project_members (
+  participant_id uuid NOT NULL,
+  project_id     uuid NOT NULL,
+  -- membership is a fact, not a cache: the row exists or it does not
+  created_at     timestamptz NOT NULL,
+  deleted_at     timestamptz,
+  CHECK (deleted_at IS NULL OR deleted_at >= created_at),
+  updated_at     timestamptz,
+  updated_by     uuid,
+  PRIMARY KEY (participant_id, project_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_members_project
+  ON project_members (project_id) WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS devices (
+  id             uuid PRIMARY KEY,
+  participant_id uuid NOT NULL,
+  name           text NOT NULL, -- human-facing label; bounded at the contract layer
+  -- revocation: set once, never cleared. The row stays for the audit trail
+  -- and the member's device list; a set value means the key is dead as of now.
+  revoked_at     timestamptz,
+  revoke_reason  text,
+  last_seen_at   timestamptz,
+  created_at     timestamptz NOT NULL,
+  deleted_at     timestamptz,
+  CHECK (deleted_at IS NULL OR deleted_at >= created_at),
+  CHECK (revoked_at IS NULL OR revoked_at >= created_at),
+  updated_at     timestamptz,
+  updated_by     uuid
+);
+
+CREATE INDEX IF NOT EXISTS idx_devices_participant
+  ON devices (participant_id) WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS device_keys (
+  key_id      uuid PRIMARY KEY,
+  device_id   uuid NOT NULL,
+  -- sha256 hex, 64 lowercase chars; the wire never carries this column
+  verifier    text NOT NULL CHECK (char_length(verifier) = 64 AND verifier ~ '^[0-9a-f]{64}$'),
+  algorithm   text NOT NULL DEFAULT 'sha256' CHECK (algorithm = 'sha256'),
+  -- denormalized immediate-stop flag for hot paths that read the key without
+  -- joining the device row; the trigger below keeps it in sync
+  revoked_at  timestamptz,
+  issued_at   timestamptz NOT NULL,
+  deleted_at  timestamptz,
+  CHECK (deleted_at IS NULL OR deleted_at >= issued_at),
+  CHECK (revoked_at IS NULL OR revoked_at >= issued_at),
+  updated_at  timestamptz,
+  updated_by  uuid
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_device_keys_device_active
+  ON device_keys (device_id) WHERE revoked_at IS NULL AND deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_device_keys_lookup
+  ON device_keys (key_id) WHERE revoked_at IS NULL AND deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS device_codes (
+  -- RFC 8628: the code the user authorizes at a browser; the daemon polls it
+  device_code      text PRIMARY KEY,
+  -- the participant resolves from the completed flow, never from the request
+  participant_id   uuid,
+  user_code        text NOT NULL,
+  verification_uri text NOT NULL,
+  expires_at       timestamptz NOT NULL,
+  interval_seconds integer NOT NULL DEFAULT 5 CHECK (interval_seconds >= 1 AND interval_seconds <= 60),
+  -- the poll state machine: pending -> authorized | denied | expired
+  status           text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','authorized','denied','expired')),
+  created_at       timestamptz NOT NULL,
+  consumed_at      timestamptz,
+  CHECK (consumed_at IS NULL OR consumed_at >= created_at)
+);
+
+CREATE TABLE IF NOT EXISTS device_sessions (
+  -- the one-shot token the daemon spends to register a device
+  session_token    text PRIMARY KEY,
+  device_code      text NOT NULL,
+  participant_id   uuid NOT NULL,
+  access_token     text NOT NULL,
+  refresh_token    text,
+  expires_at       timestamptz NOT NULL,
+  consumed_at      timestamptz,
+  created_at       timestamptz NOT NULL,
+  CHECK (consumed_at IS NULL OR consumed_at >= created_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_device_sessions_code
+  ON device_sessions (device_code) WHERE consumed_at IS NULL;
+
+-- Revoking a device kills its active key in the same statement, so any path
+-- that only touches the device row still cascades the stop flag.
+
+CREATE OR REPLACE FUNCTION device_revocation_cascades() RETURNS trigger AS $$
+BEGIN
+  UPDATE device_keys
+  SET revoked_at = now(), updated_at = now()
+  WHERE device_id = NEW.id AND revoked_at IS NULL;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS device_revocation_cascade ON devices;
+CREATE TRIGGER device_revocation_cascade
+  AFTER UPDATE OF revoked_at ON devices
+  FOR EACH ROW
+  WHEN (OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL)
+  EXECUTE FUNCTION device_revocation_cascades();

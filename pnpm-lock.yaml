@@ -41,13 +41,42 @@ importers:
 
   packages/application:
     dependencies:
+      '@navis/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@navis/domain':
         specifier: workspace:*
         version: link:../domain
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
     devDependencies:
       '@navis/infrastructure':
         specifier: workspace:*
         version: link:../infrastructure
+      '@types/node':
+        specifier: 24.13.3
+        version: 24.13.3
+
+  packages/bridge-daemon:
+    dependencies:
+      '@navis/domain':
+        specifier: workspace:*
+        version: link:../domain
+    devDependencies:
+      '@types/node':
+        specifier: 24.13.3
+        version: 24.13.3
+
+  packages/cli:
+    dependencies:
+      '@navis/bridge-daemon':
+        specifier: workspace:*
+        version: link:../bridge-daemon
+      '@navis/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+    devDependencies:
       '@types/node':
         specifier: 24.13.3
         version: 24.13.3
@@ -80,6 +109,28 @@ importers:
         specifier: 3.4.7
         version: 3.4.7
     devDependencies:
+      '@types/node':
+        specifier: 24.13.3
+        version: 24.13.3
+
+  services/api:
+    dependencies:
+      '@navis/application':
+        specifier: workspace:*
+        version: link:../../packages/application
+      '@navis/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@navis/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@navis/infrastructure':
+        specifier: workspace:*
+        version: link:../../packages/infrastructure
       '@types/node':
         specifier: 24.13.3
         version: 24.13.3

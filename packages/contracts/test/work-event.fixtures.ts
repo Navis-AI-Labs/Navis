@@ -12,6 +12,8 @@ export const fixtureIds = {
   checkpoint: '01923a61-7a1e-7f4a-916c-7d8e9f0a1b2c',
 } as const;
 
+const PRIVACY_HASH = '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08';
+
 const envelope = {
   schema_version: 1,
   occurred_at: '2026-09-14T08:30:00.000Z',
@@ -54,5 +56,34 @@ export const canonicalWorkEventFixtures = [
     ...envelope,
     event_type: 'candidate.proposed',
     payload: { kind: 'asset', content: { title: 'captured asset', summary: 'from transcript' } },
+  },
+  {
+    ...envelope,
+    event_type: 'user.message',
+    payload: {
+      privacy: {
+        char_length: 412,
+        sha256: PRIVACY_HASH,
+        summary: 'asked for the acceptance sweep',
+      },
+    },
+  },
+  {
+    ...envelope,
+    event_type: 'agent.message',
+    payload: { privacy: { char_length: 1884, sha256: PRIVACY_HASH } },
+  },
+  {
+    ...envelope,
+    event_type: 'tool.call.requested',
+    payload: { tool_name: 'read_file', privacy: { char_length: 96, sha256: PRIVACY_HASH } },
+  },
+  {
+    ...envelope,
+    event_type: 'tool.call.result',
+    payload: {
+      tool_name: 'read_file',
+      privacy: { char_length: 2048, sha256: PRIVACY_HASH, summary: 'file read clean' },
+    },
   },
 ] as const;

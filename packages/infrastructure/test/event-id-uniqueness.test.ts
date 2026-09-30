@@ -98,7 +98,10 @@ describe('Event ID uniqueness - both adapters', () => {
 
       // The eventIds map still tracks ownership
       // @ts-expect-error - accessing private field for test
-      expect(store.eventIds.get('0198b100-0000-7000-8000-000000000100')).toBe(PROJECT_A);
+      expect(store.eventIds.get('0198b100-0000-7000-8000-000000000100')).toEqual({
+        projectId: PROJECT_A,
+        deviceId: null,
+      });
     });
   });
 

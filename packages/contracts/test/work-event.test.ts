@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  type CanonicalWorkEvent,
   UnsupportedWorkEventVersionError,
   canonicalWorkEventSchema,
   canonicalWorkEventSchemaVersion,
@@ -10,6 +11,22 @@ import {
   parseCanonicalWorkEvent,
 } from '../src/work-event.js';
 import { canonicalWorkEventFixtures } from './work-event.fixtures.js';
+
+const PRIVACY_HASH = '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08';
+
+interface PrivacyPayload {
+  privacy: Record<string, unknown>;
+}
+
+function privacyOf(event: CanonicalWorkEvent): Record<string, unknown> {
+  return (event.payload as PrivacyPayload).privacy;
+}
+
+function fixtureOfType(type: string): CanonicalWorkEvent {
+  const found = canonicalWorkEventFixtures.find((f) => f.event_type === type);
+  if (!found) throw new Error(`missing fixture for ${type}`);
+  return found;
+}
 
 describe('canonical work event envelope', () => {
   it('accepts one golden fixture per event_type and round-trips lossless', () => {
@@ -107,5 +124,53 @@ describe('canonical work event envelope', () => {
         canonicalWorkEventSchema.parse(fixture),
       );
     }
+  });
+});
+
+describe('session-internal events', () => {
+  it('one fixture per session verb round-trips lossless', () => {
+    const sessionFixtures = canonicalWorkEventFixtures.filter((f) =>
+      ['user.message', 'agent.message', 'tool.call.requested', 'tool.call.result'].includes(
+        f.event_type,
+      ),
+    );
+    expect(sessionFixtures).toHaveLength(4);
+    for (const fixture of sessionFixtures) {
+      expect(parseCanonicalWorkEvent(fixture)).toEqual(fixture);
+    }
+  });
+
+  it('the metadata class carries structural facts, never content', () => {
+    const privacy = privacyOf(parseCanonicalWorkEvent(fixtureOfType('user.message')));
+    expect(privacy).toHaveProperty('char_length');
+    expect(privacy).toHaveProperty('sha256', PRIVACY_HASH);
+    expect('body' in privacy).toBe(false);
+    expect('text' in privacy).toBe(false);
+    expect('content' in privacy).toBe(false);
+  });
+
+  it('a tool call records its tool name', () => {
+    const parsed = parseCanonicalWorkEvent(fixtureOfType('tool.call.requested'));
+    expect((parsed.payload as { tool_name: string }).tool_name).toBe('read_file');
+  });
+
+  it('a malformed privacy hash is rejected', () => {
+    const fixture = fixtureOfType('agent.message');
+    const malformed = {
+      ...fixture,
+      payload: { privacy: { char_length: 10, sha256: 'not-hex' } },
+    };
+    expect(() => parseCanonicalWorkEvent(malformed)).toThrow();
+  });
+
+  it('undeclared privacy fields are stripped on the consumer path', () => {
+    const fixture = fixtureOfType('user.message');
+    const withExtra = {
+      ...fixture,
+      payload: {
+        privacy: { ...privacyOf(fixture), body: 'the actual message body' },
+      },
+    };
+    expect('body' in privacyOf(parseCanonicalWorkEvent(withExtra))).toBe(false);
   });
 });

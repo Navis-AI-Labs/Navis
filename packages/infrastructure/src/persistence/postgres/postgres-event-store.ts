@@ -6,6 +6,7 @@ import {
   projectionSnapshotSchema,
   retentionClassSchema,
   type EventEnvelope,
+  type EventIdentity,
   type EventStore,
   type ProjectionSnapshot,
   type RetentionClass,
@@ -222,6 +223,33 @@ export class PostgresEventStore implements EventStore {
       `;
       const rows = inserted as unknown as { seq: unknown }[];
       return rows.map((r) => Number(r.seq)).sort((a, b) => a - b);
+    });
+  }
+
+  async headSeq(projectId: string): Promise<number> {
+    const rows = await this.sql`
+      SELECT seq FROM project_events WHERE project_id = ${projectId} ORDER BY seq DESC LIMIT 1
+    `;
+    const head = rows[0] as Record<string, unknown> | undefined;
+    return head === undefined ? 0 : Number(head['seq']);
+  }
+
+  async existingEventIdentities(
+    projectId: string,
+    eventIds: readonly string[],
+  ): Promise<readonly EventIdentity[]> {
+    if (eventIds.length === 0) return [];
+    const rows = await this.sql`
+      SELECT event_id, metadata->>'device_id' AS device_id
+      FROM project_events
+      WHERE project_id = ${projectId} AND event_id = ANY (${this.sql.array([...eventIds])}::uuid[])
+    `;
+    return rows.map((row) => {
+      const device = (row as Record<string, unknown>)['device_id'];
+      return {
+        event_id: String((row as Record<string, unknown>)['event_id']),
+        device_id: typeof device === 'string' && device.length > 0 ? device : null,
+      };
     });
   }
 }

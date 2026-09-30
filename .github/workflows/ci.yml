@@ -14,28 +14,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Cross-platform gate: the bridge-daemon ships on three OSes, so format /
+  # build / lint / typecheck / deps boundaries / unit tests must pass on each.
   validate:
-    name: Validate repository
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_USER: navis
-          POSTGRES_PASSWORD: navis
-          POSTGRES_DB: navis_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U navis"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-    env:
-      DATABASE_URL: postgres://navis:navis@127.0.0.1:5432/navis_test
+    name: Validate repository (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
 
     steps:
       - name: Check out source
@@ -58,5 +46,69 @@ jobs:
       - name: Run repository validation
         run: pnpm validate
 
-      - name: Audit production dependencies
-        run: pnpm dependencies:audit
+  # Real-database lane: separates from the matrix because GitHub service
+  # containers only run on Linux runners. Zero skips are enforced — a
+  # Postgres-backed suite that "passes" by skipping is a false green.
+  validate-postgres:
+    name: Validate against real Postgres (zero skips enforced)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:15
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_USER: navis
+          POSTGRES_PASSWORD: navis
+          POSTGRES_DB: navis_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.22.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build all packages
+        run: pnpm build
+      - name: Run full suite with DATABASE_URL (with build)
+        run: pnpm vitest run
+        env:
+          DATABASE_URL: postgres://navis:navis@127.0.0.1:5432/navis_test
+      - name: Fail if any test was skipped
+        if: always()
+        shell: bash
+        run: |
+          pnpm vitest run 2>&1 | tee /tmp/vitest-out.txt || true
+          SKIPPED=$(grep -Eo 'Tests[[:space:]]+[0-9]+ passed \| [0-9]+ skipped' /tmp/vitest-out.txt | grep -Eo '[0-9]+ skipped' | grep -Eo '^[0-9]+' || echo "0")
+          if [[ "${SKIPPED}" -ne 0 ]]; then
+            echo "::error::${SKIPPED} tests skipped — the Postgres lane must never skip"
+            exit 1
+          fi
+
+  audit:
+    name: Audit production dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.22.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm dependencies:audit

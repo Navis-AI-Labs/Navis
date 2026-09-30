@@ -101,4 +101,21 @@ export interface EventStore {
     toSeq: number,
     retentionClass: RetentionClass,
   ): Promise<readonly number[]>;
+  /** The project's current head seq (0 when the ledger is empty). */
+  headSeq(projectId: string): Promise<number>;
+  /**
+   * Set membership over event ids, with the device that authored each
+   * stored event: the `(event_id, device_id)` pair the ingest flow
+   * deduplicates on. Returns only the ids that already exist.
+   */
+  existingEventIdentities(
+    projectId: string,
+    eventIds: readonly string[],
+  ): Promise<readonly EventIdentity[]>;
+}
+
+/** An existing event's identity: its id and the device that authored it. */
+export interface EventIdentity {
+  readonly event_id: string;
+  readonly device_id: string | null;
 }

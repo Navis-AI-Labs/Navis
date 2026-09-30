@@ -20,7 +20,12 @@ import {
 /** The only canonical work event schema version this package supports. */
 export const canonicalWorkEventSchemaVersion = 1;
 
-/** Closed v1 event vocabulary; adding a value requires bumping the schema version. */
+/**
+ * Closed v1 event vocabulary. The four session-internal verbs
+ * (user.message / agent.message / tool.call.requested / tool.call.result)
+ * carry the session process the daemon extracts. A consumer that does not
+ * know a verb fails closed rather than guessing its payload.
+ */
 export const canonicalWorkEventTypeSchema = z.enum([
   'work.started',
   'work.progressed',
@@ -28,6 +33,10 @@ export const canonicalWorkEventTypeSchema = z.enum([
   'checkpoint.suggested',
   'evidence.captured',
   'candidate.proposed',
+  'user.message',
+  'agent.message',
+  'tool.call.requested',
+  'tool.call.result',
 ]);
 
 /** Human review state of the extraction; distinct from extractor confidence. */
@@ -95,6 +104,40 @@ const candidateProposedPayload = {
   content: z.json().optional(),
 } as const;
 
+/** Structural facts only: lengths, hashes, a bounded summary. Content stays local. */
+const sessionPrivacyMetadataSchema = z
+  .object({
+    char_length: z.number().int().min(0),
+    sha256: z
+      .string()
+      .length(64)
+      .regex(/^[0-9a-f]{64}$/),
+    summary: textWireSchema.optional(),
+  })
+  .strip();
+
+/** Payload for `user.message`: a human turn in the session. */
+const userMessagePayload = {
+  privacy: sessionPrivacyMetadataSchema,
+} as const;
+
+/** Payload for `agent.message`: an assistant turn in the session. */
+const agentMessagePayload = {
+  privacy: sessionPrivacyMetadataSchema,
+} as const;
+
+/** Payload for `tool.call.requested`: an invocation issued to a tool. */
+const toolCallRequestedPayload = {
+  tool_name: z.string().min(1).max(128),
+  privacy: sessionPrivacyMetadataSchema,
+} as const;
+
+/** Payload for `tool.call.result`: the outcome a tool returned. */
+const toolCallResultPayload = {
+  tool_name: z.string().min(1).max(128),
+  privacy: sessionPrivacyMetadataSchema,
+} as const;
+
 /**
  * Builds the envelope union in one of two tolerances. Producer-strict
  * rejects undeclared fields everywhere; consumer-tolerant drops them.
@@ -135,6 +178,26 @@ function workEventSchemas(strict: boolean) {
       ...envelopeShape,
       event_type: z.literal('candidate.proposed'),
       payload: object(candidateProposedPayload),
+    }),
+    object({
+      ...envelopeShape,
+      event_type: z.literal('user.message'),
+      payload: object(userMessagePayload),
+    }),
+    object({
+      ...envelopeShape,
+      event_type: z.literal('agent.message'),
+      payload: object(agentMessagePayload),
+    }),
+    object({
+      ...envelopeShape,
+      event_type: z.literal('tool.call.requested'),
+      payload: object(toolCallRequestedPayload),
+    }),
+    object({
+      ...envelopeShape,
+      event_type: z.literal('tool.call.result'),
+      payload: object(toolCallResultPayload),
     }),
   ]);
 }

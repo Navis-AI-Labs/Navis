@@ -37,6 +37,21 @@ module.exports = {
       from: { path: '^packages/infrastructure/src' },
       to: { path: '^(services/|apps/)' },
     },
+    {
+      name: 'services-api-imports-only-public',
+      severity: 'error',
+      from: { path: '^services/api/src' },
+      to: {
+        path: '^packages/',
+        pathNot: '^packages/(contracts|application|domain)/',
+      },
+    },
+    {
+      name: 'bridge-daemon-not-import-server',
+      severity: 'error',
+      from: { path: '^packages/bridge-daemon/src' },
+      to: { path: '^services/' },
+    },
   ],
   options: {
     doNotFollow: { path: 'node_modules' },

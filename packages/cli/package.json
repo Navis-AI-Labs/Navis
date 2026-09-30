@@ -1,0 +1,31 @@
+{
+  "name": "@navis/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Navis CLI: stateless client for the per-user bridge daemon (init / status / session / bridge link / bridge unlink / bridge login / hook).",
+  "exports": {
+    ".": {
+      "types": "./dist/index.js",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "navis": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json --pretty false",
+    "clean": "tsc -b tsconfig.json --clean",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit --pretty false"
+  },
+  "dependencies": {
+    "@navis/bridge-daemon": "workspace:*",
+    "@navis/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3"
+  }
+}

@@ -13,6 +13,9 @@
     },
     {
       "path": "./packages/application"
+    },
+    {
+      "path": "./services/api"
     }
   ]
 }

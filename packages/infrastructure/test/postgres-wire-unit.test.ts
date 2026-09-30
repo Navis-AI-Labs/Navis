@@ -38,6 +38,7 @@ interface FakeSqlOptions {
   savedRows?: unknown[];
   appliedRows?: unknown[];
   markRows?: unknown[];
+  identityRows?: unknown[];
   unsafeError?: Error;
 }
 
@@ -53,6 +54,9 @@ function makeFakeSql(options: FakeSqlOptions = {}) {
     }
     if (text.includes('SELECT seq FROM project_events')) {
       return Promise.resolve(options.headRows ?? []);
+    }
+    if (text.includes("metadata->>'device_id'")) {
+      return Promise.resolve(options.identityRows ?? []);
     }
     if (text.includes('SELECT state_version FROM project_events')) {
       return Promise.resolve(options.cursorRows ?? []);
@@ -87,6 +91,7 @@ function makeFakeSql(options: FakeSqlOptions = {}) {
       beginCount += 1;
       return Promise.resolve(cb(makeTx()));
     },
+    array: (values: readonly unknown[]): unknown[] => [...values],
     json: (value: unknown): { oid: number; value: unknown } => ({ oid: 3802, value }),
     options: { max: POOL_MAX },
     end: (): Promise<void> => Promise.resolve(),
@@ -303,6 +308,48 @@ describe('PostgresEventStore against a scripted wire (unit, no database)', () =>
     );
   });
 
+  it('reports head seq 0 when a project has no events', async () => {
+    const projectId = uuidv7();
+    const fake = makeFakeSql({ headRows: [] });
+    await expect(new PostgresEventStore(fake.sql).headSeq(projectId)).resolves.toBe(0);
+  });
+
+  it('reads head seq as the latest committed event', async () => {
+    const projectId = uuidv7();
+    const fake = makeFakeSql({ headRows: [{ seq: '7' }] });
+    await expect(new PostgresEventStore(fake.sql).headSeq(projectId)).resolves.toBe(7);
+    const q = fake.queries.find((query) => query.text.includes('ORDER BY seq DESC'));
+    expect(q).toBeDefined();
+  });
+
+  it('skips the identity query entirely when no ids are requested', async () => {
+    const store = new PostgresEventStore(makeFakeSql().sql);
+    await expect(store.existingEventIdentities(uuidv7(), [])).resolves.toEqual([]);
+  });
+
+  it('maps stored device ids to event identities, null when absent', async () => {
+    const projectId = uuidv7();
+    const known = uuidv7();
+    const unattributed = uuidv7();
+    const fake = makeFakeSql({
+      identityRows: [
+        { event_id: known, device_id: 'device-1' },
+        { event_id: unattributed, device_id: null },
+      ],
+    });
+    const found = await new PostgresEventStore(fake.sql).existingEventIdentities(projectId, [
+      known,
+      unattributed,
+      uuidv7(),
+    ]);
+    expect(found).toEqual([
+      { event_id: known, device_id: 'device-1' },
+      { event_id: unattributed, device_id: null },
+    ]);
+    const q = fake.queries.find((query) => query.text.includes('ANY'));
+    expect(q).toBeDefined();
+  });
+
   it('normalizes negative and non-integral cursors before the wire query', async () => {
     const projectId = uuidv7();
     const fake = makeFakeSql({ loadRows: [driverRow(projectId, 1)] });
@@ -502,13 +549,15 @@ describe('delete-semantics invariants (structural guards, no database)', () => {
     'utf8',
   );
 
-  it('EventStore port exposes exactly the five non-destructive operations — no delete ever', () => {
+  it('EventStore port exposes exactly the seven non-destructive operations — no delete ever', () => {
     for (const adapter of [InMemoryEventStore, PostgresEventStore]) {
       const methods = Object.getOwnPropertyNames(adapter.prototype).filter(
         (m) => m !== 'constructor' && m !== 'appendInTransaction',
       );
       expect(methods.sort()).toEqual([
         'append',
+        'existingEventIdentities',
+        'headSeq',
         'loadEvents',
         'loadSnapshot',
         'markRetention',

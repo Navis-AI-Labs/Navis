@@ -6,11 +6,16 @@ export default defineConfig({
       exclude: [
         '**/*.test.ts',
         '**/index.ts',
+        // Pure contract files: interfaces and type-only modules compile to no
+        // runtime statements, and v8 reports the empty file as 0% — a port is
+        // proven by its adapters, not by statements here.
+        '**/ports/**/*.ts',
+        '**/bridge/lifetime.ts',
         // Postgres-wire adapter + migration runner are exercised on every
         // CI run through the integration suite (CI provides DATABASE_URL);
         // without a configured database they skip cleanly.
       ],
-      include: ['packages/*/src/**/*.ts'],
+      include: ['packages/*/src/**/*.ts', 'services/*/src/**/*.ts'],
       provider: 'v8',
       reporter: ['text', 'json-summary'],
       thresholds: {
@@ -20,7 +25,7 @@ export default defineConfig({
         statements: 100,
       },
     },
-    include: ['packages/*/test/**/*.test.ts'],
+    include: ['packages/*/test/**/*.test.ts', 'services/*/test/**/*.test.ts'],
     passWithNoTests: false,
     restoreMocks: true,
     // Seeded fuzz batteries replay hundreds of thousands of events and are

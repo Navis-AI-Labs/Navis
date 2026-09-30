@@ -98,6 +98,8 @@ function observeStore(store: EventStore, failSaveOnce = false) {
     append: (...args) => store.append(...args),
     loadEvents: (...args) => store.loadEvents(...args),
     loadSnapshot: (...args) => store.loadSnapshot(...args),
+    headSeq: (...args) => store.headSeq(...args),
+    existingEventIdentities: (...args) => store.existingEventIdentities(...args),
     markRetention: async (...args) => {
       order.push('mark');
       const rows = await store.markRetention(...args);

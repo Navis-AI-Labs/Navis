@@ -50,6 +50,44 @@ function conformanceSuite(makeStore: () => EventStore): void {
     expect(await store.loadEvents(id, 0)).toEqual([]);
     expect(await store.loadSnapshot(id)).toBeNull();
   });
+  it('reports head seq 0 for a new project and the last seq after appends', async () => {
+    const store = makeStore();
+    const id = uuidv7();
+    expect(await store.headSeq(id)).toBe(0);
+    await store.append(id, [envelope(id, 1)], 0);
+    expect(await store.headSeq(id)).toBe(1);
+    await store.append(id, [envelope(id, 2), envelope(id, 3)], 1);
+    expect(await store.headSeq(id)).toBe(3);
+    // Another project's head is independent.
+    expect(await store.headSeq(uuidv7())).toBe(0);
+  });
+  it('reports existing event identities scoped to the project with the stored device', async () => {
+    const store = makeStore();
+    const id = uuidv7();
+    const other = uuidv7();
+    const withDevice = { ...envelope(id, 1), metadata: { device_id: 'device-1' } };
+    const bare = envelope(id, 2);
+    await store.append(id, [withDevice, bare], 0);
+    await store.append(other, [envelope(other, 1)], 0);
+
+    const found = await store.existingEventIdentities(id, [
+      withDevice.event_id,
+      bare.event_id,
+      uuidv7(),
+    ]);
+    expect(found).toEqual([
+      { event_id: withDevice.event_id, device_id: 'device-1' },
+      { event_id: bare.event_id, device_id: null },
+    ]);
+
+    // An id committed to another project is not an identity of this one.
+    const foreign = await store.existingEventIdentities(id, [envelope(other, 1).event_id]);
+    expect(foreign).toEqual([]);
+  });
+  it('answers the identity query for an empty id list without touching storage', async () => {
+    const store = makeStore();
+    expect(await store.existingEventIdentities(uuidv7(), [])).toEqual([]);
+  });
   it('appends a contiguous batch and loads cursor-inclusive history', async () => {
     const store = makeStore();
     const id = uuidv7();

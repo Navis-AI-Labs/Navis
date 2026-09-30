@@ -621,8 +621,8 @@ describe('valid construction of each type', () => {
       deleted_at: null,
       updated_at: null,
       updated_by: null,
-      title: '商家入驻平台',
-      purpose: '让商家在三天内完成入驻并开始销售',
+      title: 'Merchant onboarding onto the platform',
+      purpose: 'Complete merchant onboarding and start sales within three days',
       status: 'active',
       current_state_version: 0,
     });
@@ -637,7 +637,7 @@ describe('valid construction of each type', () => {
       kind: 'artifact',
       scope: 'task',
       lifecycle: 'candidate',
-      provenance: '从 W-1 的 Return 提交',
+      provenance: 'Return submitted from W-1',
       content: { media_type: 'text/typescript', storage: 'inline' },
       valid_from: null,
       valid_to: null,
@@ -664,8 +664,8 @@ describe('valid construction of each type', () => {
       target_type: 'Asset',
       actor: uuidv7(),
       result: 'conditional',
-      rationale: '覆盖率达到 91%，但边界用例 E-7 未过',
-      criteria_snapshot: { criteria: ['覆盖率 ≥ 90%'], version: 3 },
+      rationale: 'Coverage reached 91% but boundary case E-7 failed',
+      criteria_snapshot: { criteria: ['coverage ≥ 90%'], version: 3 },
     });
     expect(result.success).toBe(true);
   });
@@ -694,7 +694,7 @@ describe('valid construction of each type', () => {
       severity: 'high',
       status: 'registered',
       // blocks_delivery omitted: the baseline default false applies
-      statement: 'sub_orders 与 W2 的对接未完成',
+      statement: 'sub_orders integration with W2 incomplete',
       registered_by: uuidv7(),
     });
     expect(result.success).toBe(true);
@@ -820,7 +820,7 @@ describe('invalid construction is rejected with field-level detail', () => {
       severity: 'high',
       status: 'registered',
       blocks_delivery: false,
-      statement: '登录接口 500',
+      statement: 'Login endpoint returned 500',
       fowler_quadrant: 'prudent_deliberate',
       registered_by: uuidv7(),
     });
@@ -868,7 +868,7 @@ describe('acceptance rationale rule', () => {
     target_ref: uuidv7(),
     target_type: 'Asset' as const,
     actor: uuidv7(),
-    criteria_snapshot: { criteria: ['默认标准'], version: 1 },
+    criteria_snapshot: { criteria: ['default standard'], version: 1 },
   });
 
   it('rejects a rejected verdict without rationale, pointing at rationale', () => {
@@ -893,12 +893,12 @@ describe('acceptance rationale rule', () => {
     const first = acceptanceSchema.parse({
       ...base(),
       result: 'conditional',
-      rationale: '缺边界用例',
+      rationale: 'missing boundary coverage',
     });
     const second = acceptanceSchema.parse({
       ...base(),
       result: 'accepted',
-      rationale: '补齐后通过',
+      rationale: 'passes after filling boundary coverage',
     });
     expect(first.id).not.toBe(second.id);
     expect(first.result).toBe('conditional');

@@ -8,24 +8,24 @@ TBD - created by archiving change bridge-session-hook. Update Purpose after arch
 
 ### Requirement: session-start hook contract
 
-The contract package SHALL define a schema `bridgeHookInvocationSchema` whose shape is `{ hook: 'session.start'; project_id; request_id }` with `request_id` being an idempotency envelope, and a schema `bridgeHookResultSchema` with shape `{ status: 'started' | 'reused' | 'failed'; pid?: number; reason?: string }`. Both shapes are closed schemas; any extra key fails validation.
+The contract package SHALL define `bridgeHookInvocationSchema` whose shape is `{ hook: 'session.start'; request_id; cwd; toml_present; toml_project_id }` and `bridgeHookResultSchema` with shape `{ status: 'bound' | 'reused' | 'unbound'; event_id?; bound_source?; reason?; context_summary? }`. The daemon decides the project from the binding table; the caller no longer passes `project_id`. `context_summary`, when present, is a structured object (project name, status, `state_version`, active work count, open hold count, last update) with no character cap, plus a state-change marker. Both shapes are closed schemas; any extra key fails validation.
 
-#### Scenario: well-formed invocation validates
+#### Scenario: a bound session returns structured context
 
-- **WHEN** a runtime calls the hook with `{ hook: 'session.start', project_id: '<uuid>', request_id: '<uuid>' }`
-- **THEN** `bridgeHookInvocationSchema.safeParse(...)` returns success
+- **WHEN** the hook fires for a directory with a verified binding
+- **THEN** the result status is `bound`
+- **AND** `context_summary` carries the structured fields and the state-change marker
 
-#### Scenario: malformed invocation is rejected
+#### Scenario: an unbound session reports the reason
 
-- **WHEN** the hook field is anything else or any extra key appears
-- **THEN** `safeParse` returns success=false
-- **AND** the contract validation error enumerates the offending path
+- **WHEN** the hook fires for a directory with no toml
+- **THEN** the result status is `unbound`
+- **AND** `reason` is `no_toml`
+- **AND** `context_summary` is absent
 
-#### Scenario: result shape covers all three outcomes
+#### Scenario: a reused request returns the same event id
 
-- **WHEN** the hook execution ends
-- **THEN** a status of `started`, `reused`, or `failed` is emitted
-- **AND WHEN** status is `started` or `reused`
-- **THEN** `pid` is a positive integer
-- **AND WHEN** status is `failed`
-- **THEN** `reason` is a non-empty bounded text
+- **WHEN** the hook fires again with the same `request_id`
+- **THEN** the result status is `reused`
+- **AND** `event_id` equals the event id of the first `bound` result
+- **AND** no new session event is written
