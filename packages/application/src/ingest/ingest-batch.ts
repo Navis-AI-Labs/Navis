@@ -20,7 +20,7 @@ import { ZodError as ZodErrorValue, type ZodError } from 'zod';
  * The batch is the unit of transport; the event is the unit of outcome. A
  * malformed event never fails its siblings: every event is validated on its
  * own, duplicates are acknowledged without error, and the survivors append in
- * ONE ledger call, so an append is atomic per batch (standard 07). A version
+ * ONE ledger call, so an append is atomic per batch. A version
  * the service does not support is refused per event, never interpreted.
  */
 
@@ -43,7 +43,7 @@ function privacyClassFor(eventType: string): 'evidence' | 'work' | 'audit' {
 /** Ports the use case needs; concrete adapters are injected, never imported. */
 export interface IngestBatchDeps {
   readonly eventStore: EventStore;
-  /** Per-project switch for server-side payload verification (G7). */
+  /** Per-project switch for server-side payload verification. */
   readonly verifyPayloadHash: boolean;
   /** Receipt time for the ledger's `recorded_at`; the kernel never reads a clock. */
   readonly now: () => string;
@@ -209,15 +209,15 @@ export async function ingestBatch(
 
   if (appended.length > 0) {
     const head = await deps.eventStore.headSeq(projectId);
-    const snapshot = await deps.eventStore.loadSnapshot(projectId);
-    const stateVersion = snapshot === null ? 0 : snapshot.state_version;
+    const [headEvent] = await deps.eventStore.loadEvents(projectId, head);
+    const stateVersion = headEvent?.state_version ?? 0;
     const envelopes = appended.map((entry, offset) =>
       toEnvelope(entry, request, head + offset + 1, stateVersion, deps.now()),
     );
     // One append carries the whole batch: the ledger's optimistic-concurrency
     // guard makes it all-or-nothing, and a conflict is thrown, not swallowed
     // into a per-event token — it is transient, and the daemon's retry budget
-    // owns it (standard 08).
+    // owns it.
     await deps.eventStore.append(projectId, envelopes, head);
   }
 
@@ -233,7 +233,7 @@ export async function ingestBatch(
 /**
  * Maps a validated event to its ledger envelope, following the capture flow's
  * convention: the aggregate is anchored on the project, `state_version`
- * repeats the latest snapshot's version because every ingest event is an
+ * repeats the committed head's version because every ingest event is an
  * observation, and the dedup pair is the idempotency claim.
  */
 function toEnvelope(

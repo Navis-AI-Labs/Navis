@@ -26,7 +26,7 @@ const envelope = {
   review_status: 'pending',
 } as const;
 
-/** One valid fixture per closed-enum event type (v1 = six variants). */
+/** One valid fixture per closed-enum event type. */
 export const canonicalWorkEventFixtures = [
   { ...envelope, event_type: 'work.started', payload: { work_id: fixtureIds.work } },
   {

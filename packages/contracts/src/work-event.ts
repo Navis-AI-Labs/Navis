@@ -14,7 +14,7 @@ import {
  * human review state); `event_type` discriminates the payload. This shape
  * is the only runtime-validatable authority for these events: it is
  * re-declared here, never derived from server implementation types, and it
- * evolves additively (standard 06).
+ * evolves additively.
  */
 
 /** The only canonical work event schema version this package supports. */
@@ -105,37 +105,13 @@ const candidateProposedPayload = {
 } as const;
 
 /** Structural facts only: lengths, hashes, a bounded summary. Content stays local. */
-const sessionPrivacyMetadataSchema = z
-  .object({
-    char_length: z.number().int().min(0),
-    sha256: z
-      .string()
-      .length(64)
-      .regex(/^[0-9a-f]{64}$/),
-    summary: textWireSchema.optional(),
-  })
-  .strip();
-
-/** Payload for `user.message`: a human turn in the session. */
-const userMessagePayload = {
-  privacy: sessionPrivacyMetadataSchema,
-} as const;
-
-/** Payload for `agent.message`: an assistant turn in the session. */
-const agentMessagePayload = {
-  privacy: sessionPrivacyMetadataSchema,
-} as const;
-
-/** Payload for `tool.call.requested`: an invocation issued to a tool. */
-const toolCallRequestedPayload = {
-  tool_name: z.string().min(1).max(128),
-  privacy: sessionPrivacyMetadataSchema,
-} as const;
-
-/** Payload for `tool.call.result`: the outcome a tool returned. */
-const toolCallResultPayload = {
-  tool_name: z.string().min(1).max(128),
-  privacy: sessionPrivacyMetadataSchema,
+const sessionPrivacyMetadataShape = {
+  char_length: z.number().int().min(0),
+  sha256: z
+    .string()
+    .length(64)
+    .regex(/^[0-9a-f]{64}$/),
+  summary: textWireSchema.optional(),
 } as const;
 
 /**
@@ -148,6 +124,8 @@ const toolCallResultPayload = {
  */
 function workEventSchemas(strict: boolean) {
   const object = strict ? z.strictObject : z.object;
+  const messagePayload = { privacy: object(sessionPrivacyMetadataShape) };
+  const toolPayload = { ...messagePayload, tool_name: z.string().min(1).max(128) };
   return z.discriminatedUnion('event_type', [
     object({
       ...envelopeShape,
@@ -182,22 +160,22 @@ function workEventSchemas(strict: boolean) {
     object({
       ...envelopeShape,
       event_type: z.literal('user.message'),
-      payload: object(userMessagePayload),
+      payload: object(messagePayload),
     }),
     object({
       ...envelopeShape,
       event_type: z.literal('agent.message'),
-      payload: object(agentMessagePayload),
+      payload: object(messagePayload),
     }),
     object({
       ...envelopeShape,
       event_type: z.literal('tool.call.requested'),
-      payload: object(toolCallRequestedPayload),
+      payload: object(toolPayload),
     }),
     object({
       ...envelopeShape,
       event_type: z.literal('tool.call.result'),
-      payload: object(toolCallResultPayload),
+      payload: object(toolPayload),
     }),
   ]);
 }
@@ -217,6 +195,18 @@ export const canonicalWorkEventStrictSchema = workEventSchemas(true).meta({
 });
 
 export type CanonicalWorkEvent = z.infer<typeof canonicalWorkEventSchema>;
+
+/** Validates stored payloads with the producer schema; throws for unknown types or invalid data. */
+export function parseCanonicalWorkEventPayload(
+  type: string,
+  payload: unknown,
+): CanonicalWorkEvent['payload'] {
+  const variant = canonicalWorkEventStrictSchema.options.find(
+    (schema) => schema.shape.event_type.value === type,
+  );
+  if (variant === undefined) throw new Error(`unsupported work event type: ${type}`);
+  return variant.shape.payload.parse(payload);
+}
 
 /**
  * Thrown when an event claims a schema version above what this consumer

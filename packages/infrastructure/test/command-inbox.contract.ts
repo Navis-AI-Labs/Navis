@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import type { BeginResult, CommandInbox } from '@navis/domain';
+import { uuidv7, type BeginResult, type CommandInbox } from '@navis/domain';
 
 export function commandInboxContractSuite(
   name: string,
   make: () => CommandInbox | Promise<CommandInbox>,
 ): void {
   describe(name, () => {
-    const project = '01923b10-0000-7000-8000-000000000001';
-    const otherProject = '01923b10-0000-7000-8000-000000000002';
+    const project = uuidv7();
+    const otherProject = uuidv7();
 
     it('begin returns fresh exactly once for a new key', async () => {
       const inbox = await make();

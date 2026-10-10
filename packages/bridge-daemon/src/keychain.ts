@@ -81,8 +81,8 @@ function entryMissing(exitError: NodeJS.ErrnoException): boolean {
 }
 
 /**
- * Shells out to the platform credential CLI so no native module is admitted
- * (standard 09). All three CLI shapes return the secret on stdout for a hit;
+ * Uses the platform credential CLI without a native dependency.
+ * All three CLI shapes return the secret on stdout for a hit;
  * a miss is reported via a well-known stderr/id and maps to `null`.
  */
 export class PlatformKeychain implements KeychainPort {

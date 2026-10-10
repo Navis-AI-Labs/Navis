@@ -8,8 +8,7 @@ import { canonicalJson } from '../state/canonical.js';
  * begin either installs a fresh claim, replays the stored outcome of an
  * identical finished submission, or reports an in-flight claim. A key whose
  * stored hash differs from the incoming one is a collision and refuses
- * loudly — same key never silently replays a different command (D1/D2 of
- * the owning change).
+ * loudly — same key never silently replays a different command.
  */
 
 /** Outcome terminal record: what a finished submission produced, stored as canonical JSON. */

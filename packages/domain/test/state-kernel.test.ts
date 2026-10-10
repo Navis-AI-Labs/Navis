@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { COMPETITIVE_GRACE_PERIOD_DAYS } from '../src/schema/asset.js';
+import { KERNEL_EVENT_TYPES } from '../src/state/events.js';
+import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
 import { canonicalJson } from '../src/state/canonical.js';
 import {
-  COMPETITIVE_GRACE_PERIOD_DAYS,
   EQUIP_SIZE_BUDGET,
-  KERNEL_EVENT_TYPES,
   ProjectStateKernel,
   type ReturnCandidateSeed,
   type ReturnEffectSeed,
@@ -3172,5 +3173,108 @@ describe('kernel: optional-field matrix', () => {
       }),
       'forbidden',
     );
+  });
+});
+
+describe('observations in the project ledger', () => {
+  const payloadSchema = z.strictObject({ note: z.string() });
+  const validateObservation = (type: string, data: unknown): void => {
+    if (type !== 'observation.recorded') throw new Error('unsupported observation');
+    payloadSchema.parse(data);
+  };
+
+  function fixture() {
+    const { k, human } = seedKernel();
+    const observation: StateEvent = {
+      seq: k.currentSeq + 1,
+      type: 'observation.recorded',
+      actor: human,
+      at: T0,
+      data: { note: 'observed' },
+      state_version: k.stateVersion,
+      schema_version: 1,
+    };
+    return { k, human, observation, events: [...k.events, observation] };
+  }
+
+  function snapshotOf(k: ProjectStateKernel) {
+    return projectionSnapshotSchema.parse({
+      seq: k.currentSeq,
+      state_version: k.stateVersion,
+      schema_version: 1,
+      state: serializeProjectionStateRecord(k.projection),
+    });
+  }
+
+  it('preserves business state and causal authorship across every replay path', () => {
+    const { k, human, events } = fixture();
+    const before = snapshotOf(k);
+    const replayed = ProjectStateKernel.fromEvents(events, undefined, validateObservation);
+    expect(replayed.projection).toEqual({ ...k.projection, seq: k.currentSeq + 1 });
+    expect(replayed.causal_clock).toEqual({
+      ...k.causal_clock,
+      [human]: (k.causal_clock[human] ?? 0) + 1,
+    });
+    expect(replayed.verifyIntegrity()).toEqual({ ok: true });
+    expect(replayed.rebuildProjection(before)).toEqual(replayed.projection);
+    for (const snapshot of [before, snapshotOf(replayed)]) {
+      const restored = ProjectStateKernel.fromEvents(events, snapshot, validateObservation);
+      expect(restored.projection).toEqual(replayed.projection);
+      expect(restored.causal_clock).toEqual(replayed.causal_clock);
+      expect(restored.verifyIntegrity()).toEqual({ ok: true });
+    }
+  });
+
+  it('fails closed without a validator and for unknown types or invalid payloads', () => {
+    const { k, events, observation } = fixture();
+    expect(() => ProjectStateKernel.fromEvents(events)).toThrow('unknown event type');
+    for (const patch of [{ type: 'unknown.observation' }, { data: { unexpected: true } }]) {
+      expect(() =>
+        ProjectStateKernel.fromEvents(
+          [...k.events, { ...observation, ...patch }],
+          undefined,
+          validateObservation,
+        ),
+      ).toThrow(`invalid event data at seq ${String(observation.seq)}`);
+    }
+  });
+
+  it('does not let observations bypass actor, schema or state-version integrity', () => {
+    const { k, observation } = fixture();
+    const cases = [
+      { patch: { state_version: 99 }, error: 'state-version mismatch' },
+      { patch: { actor: 'unregistered' }, error: 'actor not registered' },
+      { patch: { schema_version: 99 }, error: 'unsupported schema version' },
+    ];
+    for (const { patch, error } of cases) {
+      expect(() =>
+        ProjectStateKernel.fromEvents(
+          [...k.events, { ...observation, ...patch }],
+          undefined,
+          validateObservation,
+        ),
+      ).toThrow(error);
+    }
+  });
+
+  it('retains the validator for integrity checks and snapshot rebuilds', () => {
+    const { k, events } = fixture();
+    const validator = vi.fn(validateObservation);
+    const replayed = ProjectStateKernel.fromEvents(events, undefined, validator);
+    validator.mockImplementation(() => {
+      throw new Error('validation refused');
+    });
+    expect(() => replayed.verifyIntegrity()).toThrow('validation refused');
+    expect(() => replayed.rebuildProjection(snapshotOf(k))).toThrow('validation refused');
+  });
+
+  it('reports non-Error validator failures as integrity errors', () => {
+    const { events } = fixture();
+    expect(() =>
+      ProjectStateKernel.fromEvents(events, undefined, () => {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error -- simulate an untyped validator failure
+        throw 'invalid observation';
+      }),
+    ).toThrow('schema violation');
   });
 });

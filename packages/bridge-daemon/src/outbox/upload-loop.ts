@@ -1,18 +1,6 @@
 import type { OutboxPort } from '../outbox/ports.js';
 
-/**
- * Upload loop (spec §the Outbox, task 6.4): takes pending rows in bounded
- * batches of 50, sends them, then acks the per-event results. On any
- * transport failure or rejects the loop backs off exponentially (capped
- * at 60 seconds) by writing `retry_after` into the row — a retry claim
- * won't take a row whose backoff has not yet elapsed.
- *
- * Crash semantics: SIGKILL mid-send leaves rows in 'sending'; the next
- * daemon instance reclaims them via `releaseSending`, which is a spec
- * requirement ("no event is lost and no event is duplicated on resume").
- * After the claim is marked the row is sent; ack is afterwards erased, the
- * row is deleted; reject → quarantine with reason attached.
- */
+/** Advances one upload batch; the caller schedules the next attempt and owns crash recovery. */
 import type { OutboxEvent } from '../outbox/ports.js';
 
 export interface HttpResponseLike {

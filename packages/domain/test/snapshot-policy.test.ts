@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import { ProjectStateKernel } from '../src/state/project-state-kernel.js';
 import {
   CAPTURE_EVENT_COUNT_WINDOW_DEFAULT,
   CAPTURE_TIME_WINDOW_DAYS_DEFAULT,
-  ProjectStateKernel,
-} from '../src/state/project-state-kernel.js';
-import {
   evaluateCaptureDue,
   extractCaptureAnchor,
   extractProjectionState,

@@ -1,14 +1,4 @@
-/**
- * Outbox port (spec §the Outbox).
- *
- * The contract here is the state machine plus the persistence guarantees.
- * All consistency rules are structural: a `local_only` event never gets a
- * `seq`, the `pending→sending` transition is one atomic transaction per
- * batch, and the only way a row disappears is `acknowledgedByServer`.
- * `failureAcknowledgeOrigin` is kept for symmetry with test scaffolds; the
- * spec for the failure path is `releaseSending`, which surfaces the event
- * for retry instead of deleting it.
- */
+/** Captured events remain local until eligible for upload. Acknowledgment removes records; failed sends are released for retry. */
 
 export type OutboxState =
   'captured' | 'normalized' | 'pending' | 'sending' | 'acked' | 'local_only' | 'quarantined';
@@ -28,13 +18,13 @@ export interface OutboxEvent {
   readonly acked_at: string | undefined;
   /* only set in local_only / quarantined */
   readonly keep_reason: string | null;
-  /* how many times the upload loop has tried to send the row */
+  /** Recorded send failures or recovery releases. */
   readonly retry_count: number;
   /* when the next retry becomes due; null means try-now */
   readonly retry_after: string | null;
-  /* ingest-side hash the server recorded at put (spec §batch ack ledger) */
+  /** Optional payload fingerprint. */
   readonly payload_hash: string | null;
-  /* the canonical envelope as ingested (never normalized out of it) */
+  /** Serialized captured event. */
   readonly event_json: string;
 }
 
@@ -50,15 +40,11 @@ export interface OutboxCaptureInput {
 }
 
 export interface OutboxPort {
-  /** capture() is the "captured" state with the seq rule applied at first normalize. */
+  /** Stores captured events; a local-only policy routes them directly to local_only. */
   capture(input: OutboxCaptureInput): Promise<OutboxEvent>;
   /** Reads one record by id after capture; absent → null. */
   get(eventId: string): Promise<OutboxEvent | null>;
-  /**
-   * promote the record: captured → normalized → pending, all within one
-   * transaction so `seq` is allocated once and only once; already-terminal
-   * records are left untouched.
-   */
+  /** Moves a captured or sending record to pending. Sequence allocation and the state change commit together; other states are rejected. */
   promoteToPending(eventId: string, bindingId: string): Promise<OutboxEvent>;
   /**
    * claim «pending» rows that are due (`retry_after` elapsed or null),

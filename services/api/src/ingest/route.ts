@@ -11,23 +11,12 @@ import type { EventStore } from '@navis/domain';
 import { UnsupportedContractVersionError } from '../platform/errors.js';
 import type { ServiceRoute } from '../platform/server.js';
 
-/**
- * `POST /api/ingest` — the batch upload surface (spec requirement: ingest
- * accepts event batches and deduplicates on (event_id, device_id)).
- *
- * The route owns transport only: it parses the request against the public
- * contract, hands the batch to the use case, and shapes the response. Per-event
- * outcomes, rejection tokens, and the ledger append all live in the use case;
- * authorization arrives with the request context and is enforced downstream of
- * this route by the membership middleware (spec: authentication establishes
- * device identity; authorization is membership). The envelope (`{data, meta}`)
- * is applied by the server core; the route returns the body.
- */
+/** Maps the public ingest contract to the batch use case. The service composition authenticates and authorizes before this handler runs. */
 
 export interface IngestRouteDeps {
   /** The ledger; a concrete adapter is injected by the composition root. */
   readonly eventStore: EventStore;
-  /** Per-project switch for server-side payload verification (G7). */
+  /** Per-project switch for server-side payload verification. */
   readonly verifyPayloadHash: boolean;
   /** Receipt time for the ledger's `recorded_at`; the kernel never reads a clock. */
   readonly now: () => string;

@@ -105,6 +105,9 @@ export type AssetLifecycle = z.infer<typeof assetLifecycleSchema>;
 export type AssetContent = z.infer<typeof assetContentSchema>;
 export type AssetContentStorage = z.infer<typeof assetContentStorageSchema>;
 
+/** Reactivation window for a superseded competitive result. */
+export const COMPETITIVE_GRACE_PERIOD_DAYS = 90;
+
 /** Days an archived asset must age before purge eligibility; the gate below is this constant's only consumer. */
 export const PURGE_AGE_THRESHOLD_DAYS = 180;
 

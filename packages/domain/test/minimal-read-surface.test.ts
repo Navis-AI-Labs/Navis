@@ -90,3 +90,42 @@ describe('getAssetById returns not-found for out-of-scope rows', () => {
     expect(k.getAssetById('01900000-0000-7000-8000-ffffffffffff')).toBeUndefined();
   });
 });
+
+describe('public read ownership', () => {
+  it('prevents mutations of returned asset rows and their nested content', () => {
+    const k = seed();
+    const asset = createAsset(k, 'project');
+    const byId = k.getAssetById(asset.id);
+    const [listed] = k.listAssets();
+    const content = listed?.content;
+    if (byId === undefined || content === undefined) throw new Error('fixture missing');
+    expect(() => Object.assign(byId, { lifecycle: 'active' })).toThrow();
+    expect(() => Object.assign(content, { sha256: 'b'.repeat(64) })).toThrow();
+    expect(k.getAssetById(asset.id)?.lifecycle).toBe('candidate');
+    expect(k.verifyIntegrity()).toEqual({ ok: true });
+  });
+
+  it('does not expose effect rows through recovery lists', () => {
+    const k = seed();
+    const result = k.recordEffectIntent({
+      actor: HUMAN,
+      at: T0,
+      intent_key: 'read-ownership',
+      expected_version: 0,
+    });
+    if (!result.ok) throw new Error('fixture missing');
+    const [pending] = k.listPendingEffects();
+    if (pending === undefined) throw new Error('fixture missing');
+    expect(() => Object.assign(pending, { status: 'confirmed' })).toThrow();
+    k.beginEffectExecution({
+      actor: HUMAN,
+      at: T0,
+      effect_id: result.value.id,
+      expected_version: 0,
+    });
+    const [executing] = k.listExecutingEffects();
+    if (executing === undefined) throw new Error('fixture missing');
+    expect(() => Object.assign(executing, { status: 'failed' })).toThrow();
+    expect(k.verifyIntegrity()).toEqual({ ok: true });
+  });
+});

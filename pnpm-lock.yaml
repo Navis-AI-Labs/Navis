@@ -124,13 +124,13 @@ importers:
       '@navis/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@navis/infrastructure':
+        specifier: workspace:*
+        version: link:../../packages/infrastructure
       zod:
         specifier: 4.4.3
         version: 4.4.3
     devDependencies:
-      '@navis/infrastructure':
-        specifier: workspace:*
-        version: link:../../packages/infrastructure
       '@types/node':
         specifier: 24.13.3
         version: 24.13.3

@@ -1,0 +1,33 @@
+# Local development with this checkout's installed dependencies and built output.
+# Build before starting; the API applies migrations on startup. Credentials below
+# are disposable local defaults, and published ports are loopback-only.
+services:
+  postgres:
+    image: postgres:15-bookworm
+    ports:
+      - '127.0.0.1:55432:5432'
+    environment:
+      POSTGRES_USER: navis
+      POSTGRES_PASSWORD: navis
+      POSTGRES_DB: navis_test
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U navis -d navis_test']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    image: node:24-bookworm
+    working_dir: /navis
+    command: node services/api/dist/platform/index.js
+    environment:
+      DATABASE_URL: postgres://navis:navis@postgres:5432/navis_test
+      NAVIS_API_HOST: 0.0.0.0
+      NAVIS_API_PORT: '8080'
+    ports:
+      - '127.0.0.1:8080:8080'
+    volumes:
+      - ./:/navis
+    depends_on:
+      postgres:
+        condition: service_healthy

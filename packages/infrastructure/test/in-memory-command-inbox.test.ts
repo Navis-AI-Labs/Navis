@@ -10,7 +10,8 @@ import { commandInboxContractSuite } from './command-inbox.contract.js';
 
 commandInboxContractSuite('InMemoryCommandInbox contract', () => new InMemoryCommandInbox());
 
-const databaseUrl = process.env['DATABASE_URL'];
+const configuredDatabaseUrl = process.env['DATABASE_URL']?.trim();
+const databaseUrl = configuredDatabaseUrl === '' ? undefined : configuredDatabaseUrl;
 describe.runIf(databaseUrl !== undefined)('PostgresCommandInbox contract', () => {
   const sql = databaseUrl === undefined ? undefined : createConnection(databaseUrl);
   beforeAll(async () => {

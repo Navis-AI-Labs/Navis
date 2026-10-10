@@ -51,7 +51,7 @@ Agents enter a Project to work, then leave their results and experience behind. 
 
 ## Current Status
 
-Core design is complete. Implementation is in progress.
+The core domain model and API service composition are implemented and locally verified. CLI/Bridge integration and the end-to-end review and delivery workflow remain incomplete. See the [architecture status](docs/architecture.md) for the current engineering status.
 
 Contributions, Issues, and Discussions are welcome.
 

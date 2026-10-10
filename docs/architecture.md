@@ -2,194 +2,146 @@
 
 ## Status
 
-This document is a reviewable architecture baseline. It defines stable ownership and dependency rules while leaving unresolved business and runtime decisions explicit.
+Reviewed on 2026-10-10. This document separates implemented modules from the intended process composition. Remaining integration and release gates are recorded in [foundation readiness](foundation-readiness.md).
 
-| Area                                                   | Status                                                                                                                                             |
-| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Project concept                                        | Defined in the root README                                                                                                                         |
-| Repository dependency direction                        | Proposed in ADR-0001                                                                                                                               |
-| Workspace and TypeScript toolchain                     | Proposed in ADR-0002                                                                                                                               |
-| HTTP contract profile                                  | Proposed in ADR-0003 and implemented as a foundation candidate                                                                                     |
-| Web, API, Worker, and local integration runtimes       | Deferred by ADR-0004                                                                                                                               |
-| Business domain behavior                               | Domain object model implemented in the r0-kernel-foundation change (archived)                                                                      |
-| Domain-kernel storage abstraction                      | Proposed in ADR-0005 and implemented in the r0-kernel-foundation change (ports + adapters)                                                         |
-| Causal metadata between concurrent actors              | Proposed in ADR-0006 and implemented in the vector-clock-merge change (clock maintenance, merge detection, conflict marking)                       |
-| Clock component retirement safety                      | Constraints proposed in ADR-0007 and accepted in the bidirectional-merge spec; the retirement executor is deferred to a future change              |
-| Snapshot capture, restore seam, and strength read path | Implemented and archived in snapshot-strength-foundation (ADR-0008) — capture, restore parity, retention marks, and command admission are complete |
+There are seven source-bearing workspace units. The API and local integration packages exist. Web and Worker remain planned. The ten ADR files retain their recorded `Proposed` status; implementation or OpenSpec archive status does not silently accept an ADR.
 
-## System context
+| Boundary       | Current implementation                                                                                                                                                                    |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Domain         | Object schemas, single-project kernel, event history and replay, acceptance/delivery/hold gates, WorkRun/intervention, causal clocks, snapshot policy, strength advice, closed vocabulary |
+| Contracts      | Runtime schemas for transport primitives, Canonical Work Events, public Equip and Return, ingest, project query, device authorization and session hook                                    |
+| Application    | Snapshot capture, injected command dispatch, batch ingest, project queries, device authentication                                                                                         |
+| Infrastructure | In-memory and PostgreSQL persistence ports, SQL migrations, transaction-bound command intake                                                                                              |
+| API            | HTTP listener, authenticated route composition, adapter construction and resource cleanup                                                                                                 |
+| Bridge daemon  | Local IPC/lifecycle, bindings, keychain, SQLite Outbox, upload tick, extraction and context cache; business process composition is incomplete                                             |
+| CLI            | Public export entry and command invocation module; the declared executable is not present                                                                                                 |
+| Web / Worker   | No source workspace; user workflow and runtime admission remain outstanding                                                                                                               |
 
-```text
-Human participants
-        |
-        v
-Web control plane ---- public contract ---- service command/query boundary
-                                               |
-                                      Application use cases
-                                               |
-                                         Domain policy
-                                               |
-                                       output ports only
-                                               |
-                                        Infrastructure
+## System ownership
 
-Local Agent runtimes ---- local integration boundary ---- public contract
-```
-
-The future service trust domain owns authoritative Project records, accountable review, audit history, and Delivery records. A future local integration component owns device access, local policy, credentials, and offline transfer. An Agent runtime owns its execution session. Supporting runtimes never become Project State authority.
-
-## Logical ownership
-
-| Boundary        | Owns                                                           | Must not own                                                      |
-| --------------- | -------------------------------------------------------------- | ----------------------------------------------------------------- |
-| Web application | Human-facing Project, review, and Delivery workflows           | Domain mutation, database access, local Agent execution           |
-| API service     | Transport mapping, authentication integration, and composition | Domain policy or direct persistence writes from handlers          |
-| Worker service  | Retryable background entry points and composition              | Acceptance authority or silent state mutation                     |
-| Domain          | Framework-independent business policy and valid transitions    | HTTP, persistence, filesystem, queue, model, or Agent integration |
-| Contracts       | Versioned public requests, responses, events, and errors       | ORM entities, server-private classes, or Domain implementation    |
-| Application     | Use-case orchestration and output ports                        | Concrete transport, storage, queue, or framework code             |
-| Infrastructure  | Implementations of Domain and Application ports                | New business policy or public contract ownership                  |
-
-Contracts (transport primitives; work-contracts change adds the first business payloads), the Domain object model, the Application capture use case, and the Infrastructure persistence adapters (EventStore port with in-memory and PostgreSQL-wire implementations) are activated as source code because accepted or active changes give them concrete consumers and executable requirements. Other boundaries (services, apps) remain architecture, not empty directories.
-
-## Compile-time dependency direction
-
-In this graph, `A -> B` means that `A` may import `B`.
+The intended product separates local execution from shared project authority:
 
 ```text
-web ------------------------------------> contracts
+Human -> Web control plane -> API command/query boundary
+                                 |
+                            Application
+                                 |
+                              Domain
+                                 |
+                     output ports / Infrastructure
+                                 |
+                            PostgreSQL
 
-api ----------+------------------------> contracts
-              +------------------------> application
-              `------------------------> infrastructure
-
-worker -------+------------------------> contracts
-              +------------------------> application
-              `------------------------> infrastructure
-
-infrastructure +-----------------------> application
-               +-----------------------> domain
-               `-----------------------> contracts
-
-application ---+-----------------------> domain
-               `-----------------------> contracts
-
-domain --------------------------------> no Navis package
-contracts -----------------------------> no server implementation package
+Agent runtime -> hook / CLI -> Bridge daemon -> public API contracts
+                               |
+                        local SQLite + keychain
 ```
 
-Domain and Contracts are separate foundations. Public schemas remain consumable without importing server business implementation. Application owns output ports; Infrastructure implements them (the infrastructure -> application edge is an ADR-0001 permission for the composition shape, not a current import — no infrastructure source imports application today). The Application capture use case (active change) stays inside these edges: its package imports Domain at compile time, and its test composition imports the Infrastructure adapters at test time only. Deployable services are composition roots.
+This is an ownership diagram, not a claim that all arrows currently run. The service owns project state, accountable review and business audit. The Bridge owns device-local access, consent, credentials and offline transfer. The external Agent runtime owns its execution session. A synchronization acknowledgment records transport success; it does not accept a candidate or confirm delivery.
+
+| Boundary       | Owns                                                                           | Must not own                                                |
+| -------------- | ------------------------------------------------------------------------------ | ----------------------------------------------------------- |
+| Web            | Human workflows and presentation of server state                               | Direct database access or authority mutation                |
+| API            | Transport mapping, authentication integration and process composition          | Business policy inside HTTP handlers                        |
+| Worker         | Retryable asynchronous use-case entry points                                   | Unreviewed acceptance or direct state mutation              |
+| Domain         | Framework-independent business policy, event application and valid transitions | HTTP, SQL drivers, filesystem access or runtime integration |
+| Contracts      | Independently consumable public wire schemas and inferred types                | Server-private rows or classes                              |
+| Application    | Use-case orchestration and use of output ports                                 | Concrete transport and persistence adapters                 |
+| Infrastructure | Implementations of Domain and Application ports                                | New business policy                                         |
+| Bridge         | Local state and public-contract integration                                    | A second project authority                                  |
+| CLI            | User and hook invocation                                                       | A second binding store or independent remote transport      |
+
+## Dependency direction
+
+`A -> B` means A may import B under the architecture baseline:
+
+```text
+web -> contracts
+api / worker composition -> contracts, application, infrastructure
+infrastructure -> application, domain, contracts
+application -> domain, contracts
+domain -> no other Navis package
+contracts -> no server implementation package
+```
+
+Domain currently owns the EventStore, CommandInbox, DeviceAuth and ProjectDirectory ports. Infrastructure implements them; its transaction-bound intake also imports Application dispatch. This is an actual dependency, not a future placeholder.
+
+The intended local integration boundary consumes public contracts. The current Bridge package also imports Domain's lifecycle interface, and CLI imports Bridge and Contracts. Their eventual distribution boundary and the lifecycle contract's ownership need explicit review before package publication.
+
+Only `services/api/src/platform/composition.ts` may import Infrastructure inside the API source tree. It constructs the concrete adapters; other API modules consume public contracts, use cases and ports. The composition module is itself restricted to the four admitted server packages. TypeScript references follow the same build dependencies.
 
 ## Package and module depth
 
-A workspace package is a real dependency and compilation boundary. A module is an internal capability directory. These are intentionally different levels.
+A workspace package is a compilation, dependency, deployment, publication, trust or ownership boundary. Internal capabilities do not receive their own package manifests or compiler configuration.
 
-A new workspace unit requires at least one of:
+A new workspace unit requires a concrete consumer or independent runtime, release or ownership responsibility. Source grows by capability and then use case. Generic `utils`, `helpers`, `shared` and placeholder source directories do not establish ownership.
 
-- an independent consumer;
-- a distinct runtime dependency set;
-- an independent build, test, deployment, or publication boundary;
-- a separate ownership, permission, or trust boundary;
-- a different release cadence.
+### Service entry and module ownership
 
-When a workspace unit is admitted, internal source grows from accepted behavior:
+- `platform/index.ts` is a process entry: load configuration, start the runtime and handle signals.
+- `platform/composition.ts` constructs adapters, runs migrations and releases the pool after HTTP shutdown or failed startup. Its signatures expose runtime behavior and ports, not concrete adapter unions.
+- `platform/routes.ts` installs the route factories and request-local identity scope. Ingest membership is checked against the event projects; the claimed device must match the authenticated caller.
+- `platform/config.ts` owns this service's environment mapping, defaults and startup validation. A supplied database URL must be a PostgreSQL URL; absence retains the current in-memory mode.
+- `packages/cli/src/index.ts` is a package export entry. Invocation parsing and dispatch live in `commands/invocation.ts`.
 
-```text
-<workspace-unit>/
-├── package.json
-├── tsconfig.json
-└── src/
-    ├── <capability>/
-    │   └── <use-case>/       # only when the capability needs this depth
-    └── <another-capability>/
-```
+A package export entry and a process entry have different responsibilities. Neither is a place for unrelated policy or adapter implementation.
 
-Internal modules do not receive package manifests or compiler configurations. Generic `types`, `utils`, `helpers`, and `shared` directories are not default architecture; shared code stays with its owner until multiple concrete consumers prove a narrower abstraction.
+### Domain constant ownership
+
+| Values                                                                               | Owner                           | Reason                                                                               |
+| ------------------------------------------------------------------------------------ | ------------------------------- | ------------------------------------------------------------------------------------ |
+| Kernel event names, persisted event schema version and state-material classification | `state/events.ts`               | Defines the event representation shared by command emission and replay               |
+| Initial capture count/time windows                                                   | `state/snapshot.ts`             | Belong to snapshot policy; the kernel uses them when creating project policy         |
+| Competitive reactivation and purge windows                                           | `schema/asset.ts`               | Belong to asset lifecycle policy                                                     |
+| Equip fact-reference budget                                                          | `state/project-state-kernel.ts` | Used by the issuance command; no independent module is justified by this value alone |
+| Hold transition and event/status maps                                                | Kernel-private declarations     | Commands and the applier in this module own the translation                          |
+| HTTP defaults and configuration bounds                                               | `platform/config.ts`            | Service-local configuration, not shared domain policy                                |
+
+Constants stay near their owner. Existing modules are preferred over a generic constants file or one file per value. Event classifications expose predicates rather than mutable sets; public event vocabulary is frozen. The public observation grammar belongs to Contracts. Domain owns an observation-validation port; Application supplies the Contracts parser during replay. Domain does not duplicate the public event vocabulary.
 
 ## Authority and state flow
 
-The current project-level invariants are intentionally narrower than a complete domain model:
-
-- Project continuity does not belong to one Agent Session.
-- Candidate material cannot silently become authoritative state.
-- Acceptance is an accountable decision, not an executor status.
-- Artifact existence is not Delivery.
-- Memory, indexes, and projections are derived rather than authoritative.
-
-A future mutation path is constrained without selecting a transport or database:
-
 ```text
-actor intent
-  -> transport validation and mapping
-  -> Application command
-  -> Domain policy
-  -> Application output ports
-  -> transactional Infrastructure adapter
-  -> audit and observable result
+actor intent -> transport validation -> Application use case
+             -> Domain policy -> transactional port adapter
+             -> committed audit event -> rebuilt projection
 ```
 
-Queries may use projections but may not bypass this path to mutate authority. A Worker or local adapter may submit evidence or Candidate material through an authorized use case; it cannot write authoritative state directly.
+The kernel owns policy and replay but does not own a database connection. Command dispatch wraps an injected executor; the general public-command-to-ledger mapping remains unimplemented. A caller must not mistake a successful in-memory kernel call for a durable commit.
 
-### Snapshot capture and restore paths (archived change snapshot-strength-foundation)
+Canonical Work Events are observations. Ingest validates and stores their payloads, but it does not execute `submitReturn` or `acceptAsset`. Explicitly validated observations advance the replay cursor without enacting business changes. Domain rejects non-kernel events without a validator. Full replay, snapshot restoration and integrity verification validate all payloads, including snapshot-covered history, and enforce common actor, schema and business-version checks. Ingest copies the committed ledger head's version rather than a possibly older snapshot version. The complete client producer and query read model still require integration.
 
-Domain owns projection schemas (`state/projection.ts`), snapshot evaluation and restoration checks (`state/snapshot.ts`), and retention advice (`state/strength.ts`). The project-state kernel owns the commands, event history, and replay. These modules have no persistence dependency.
+Version meanings remain separate:
 
-Capture orchestration lives in `application/src/capture/capture-flow.ts` and consumes the Domain EventStore port. Concrete adapters are supplied by the caller, with tests composing the current implementations. Runtime projection schemas live in `domain/src/state/projection.ts`; the kernel, restoration, and strength share their inferred row types and reuse field constraints from the domain schemas. ADR-0008 owns the capture and recovery decisions; the snapshot-strategy specification owns observable behavior.
+- `seq`: per-project append order and storage concurrency.
+- `aggregate_revision` / `run_revision`: object or run concurrency.
+- `project_state_version`: selected business-boundary and project-status changes; ordinary activity does not necessarily increment it.
+- Snapshot cursor: the event position covered by a replay cache.
+- Wire schema and contract versions: compatibility, independent of business progress.
 
-The single-project aggregate, object schemas, Candidate lifecycle, and Acceptance-to-Delivery gates have implementations; command admission, recorded-payload validation, and event-identity uniqueness are corrected and archived. Public command transport, projection-table writers, external effect execution, tenancy, and runtime orchestration remain future boundaries.
+## Snapshot and query boundaries
 
-## Public contract boundary
+Domain `state/projection.ts` owns runtime projection shapes; `state/snapshot.ts` validates and restores snapshots; `state/strength.ts` provides deterministic retention advice. Capture orchestration is in Application and consumes EventStore. Capture owns one observation, writes retention annotations before a snapshot, and never deletes ledger events.
 
-The activated Contracts package provides only business-neutral transport primitives:
+The service's current project query computes a business version through replay, then returns event labels grouped by family. It does not expose the complete kernel projection, and its current helper does not consume snapshots. Project directory search reads the relational project/member tables; a complete projection-writer path remains outstanding.
 
-- standard request-context header names and validators;
-- JSON success response metadata and factories;
-- opaque cursor pagination metadata and factories;
-- RFC 9457 Problem Details with safe project extensions.
+Strength is a suggestion signal, not acceptance or automatic retirement. Causal comparison records concurrency; it does not reconcile content. Clock retirement has safety constraints but no executor.
 
-It does not define Project, Work, Candidate, Acceptance, Artifact, or Delivery payloads. Those appear only after their behavior is accepted. JSON Schema generation is deferred until a non-TypeScript consumer exists.
+## Trust and runtime boundaries
 
-## Trust, failure, and security
+- Authentication establishes identity; current policy must authorize the operation and resource. Device listing requires a live key; revocation also requires target ownership. Missing and foreign-owned targets receive the same 403 denial, while invalid credentials receive 401.
+- Local declarations and client-supplied device IDs are untrusted claims.
+- Credentials and unrestricted local content do not belong in telemetry or public errors.
+- Retries require idempotency and explicit treatment of unknown outcomes.
+- Liveness, dependency readiness, graceful shutdown and durable commit are distinct guarantees.
+- Realtime transport, indexes and caches never replace the event authority.
 
-- External input remains untrusted after authentication and is validated at every changed representation.
-- Credentials and unrestricted local content do not enter public contracts, telemetry, or errors.
-- HTTP status remains authoritative; an error body cannot redefine transport success or failure.
-- Retries require explicit idempotency and side-effect semantics.
-- Infrastructure failure cannot be translated into a successful Domain transition.
-- Realtime delivery is a projection mechanism, not the source of truth.
-- Production claims require the applicable evidence in `docs/foundation-readiness.md`.
+The root Compose file is a local-development convenience with loopback-only published ports. It runs the checkout's built API with PostgreSQL; it does not build an immutable product image. No complete external cloud deployment or production release is established by its existence.
 
-## Intended repository evolution
+## Remaining admission and acceptance work
 
-```text
-Navis/
-├── packages/
-│   ├── contracts/          # active foundation candidate
-│   ├── domain/             # active: object model from r0-kernel-foundation
-│   ├── application/        # active: capture use case (snapshot-strength-foundation, archived)
-│   └── infrastructure/     # active: EventStore port adapters (in-memory, PostgreSQL wire) from r0-kernel-foundation
-├── services/
-│   ├── api/                # create after API runtime ADR
-│   └── worker/             # create after asynchronous use case and runtime ADR
-└── apps/
-    └── web/                # create after an accepted user workflow and Web ADR
-```
-
-This tree is a plan, not the current filesystem. Planned boundaries stay here until activated.
-
-## Stage gates
-
-1. **Foundation baseline:** repository governance, strict toolchain, contract primitives, schema generation, and quality gates.
-2. **Behavior baseline:** accept the smallest valuable user and Domain behavior in OpenSpec.
-3. **Boundary activation:** create only the packages or processes required by that behavior and accepted ADRs.
-4. **Vertical implementation:** implement the behavior with focused, contract, integration, and failure tests.
-5. **Production readiness:** complete security, migration, reliability, performance, release, and operational evidence for every activated runtime.
-
-## Open decisions
-
-- Public API and event versioning beyond the common foundation.
-- API and Web frameworks.
-- Application persistence of relational read models beyond the event log and snapshots.
-- Worker and durable workflow runtime.
-- Identity, tenancy, and authorization model.
-- Local integration runtime and release boundary.
+1. Complete browser authorization and reconcile the full project read model with the accepted requirements.
+2. Verify the actual API and CLI process composition and built-package contents.
+3. Exercise the real Bridge producer against the real service response contract.
+4. Introduce the first human review workflow and asynchronous use case under their own reviewed behavior and runtime choices.
+5. Supply deployment, backup/restore, operational and release evidence before a production claim.

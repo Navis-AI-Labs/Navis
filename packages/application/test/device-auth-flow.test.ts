@@ -192,11 +192,35 @@ describe('revokeDevice + authenticateKey', () => {
   it('denies a revoked key immediately, before any read', async () => {
     const fx = fixture();
     const device = await issueKey(fx);
-    await revokeDevice(fx.deps, device.device_id, 'retired', PARTICIPANT);
+    await expect(revokeDevice(fx.deps, device.device_id, 'retired', PARTICIPANT)).resolves.toBe(
+      true,
+    );
+    await expect(revokeDevice(fx.deps, device.device_id, 'retired', PARTICIPANT)).resolves.toBe(
+      true,
+    );
 
     const auth = await authenticateKey(fx.deps, `Bearer ${device.key_id}.${device.key_secret}`);
 
     expect(auth).toEqual({ outcome: 'device_revoked' });
+  });
+
+  it('denies foreign and missing devices without changing their records or keys', async () => {
+    const fx = fixture();
+    const device = await issueKey(fx);
+    const record = await fx.store.getDevice(device.device_id);
+    const key = await fx.store.getKeyById(device.key_id);
+    const other = '01924a61-7a1b-7c2d-8e3f-0000000000b2';
+    await expect(revokeDevice(fx.deps, device.device_id, 'unauthorized', other)).resolves.toBe(
+      false,
+    );
+    await expect(
+      revokeDevice(fx.deps, '01924a61-7a1b-7c2d-8e3f-000000009999', null, other),
+    ).resolves.toBe(false);
+    expect(await fx.store.getDevice(device.device_id)).toEqual(record);
+    expect(await fx.store.getKeyById(device.key_id)).toEqual(key);
+    await expect(
+      authenticateKey(fx.deps, `Bearer ${device.key_id}.${device.key_secret}`),
+    ).resolves.toMatchObject({ outcome: 'authenticated' });
   });
 
   it('denies a wrong secret with the same token as an unknown key', async () => {

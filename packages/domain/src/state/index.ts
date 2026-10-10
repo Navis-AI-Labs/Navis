@@ -9,15 +9,16 @@ export { advanceClock, compareClocks, mergeClocks } from './vector-clock.js';
 export type { ClockSnapshot, ClockVerdict } from './vector-clock.js';
 export { EventHistory } from './event-history.js';
 export { scopeVisibleForProject } from './scope-visibility.js';
-export { stateEventSchema, type StateEvent } from './events.js';
 export {
-  COMPETITIVE_GRACE_PERIOD_DAYS,
-  EQUIP_SIZE_BUDGET,
+  stateEventSchema,
   STATE_EVENT_SCHEMA_VERSION,
   KERNEL_EVENT_TYPES,
-  ProjectStateKernel,
-} from './project-state-kernel.js';
-export type { KernelEventType } from './project-state-kernel.js';
+  type KernelEventType,
+  type ObservationValidator,
+  type StateEvent,
+} from './events.js';
+export { EQUIP_SIZE_BUDGET, ProjectStateKernel } from './project-state-kernel.js';
+export { COMPETITIVE_GRACE_PERIOD_DAYS } from '../schema/asset.js';
 export type { KernelProjection } from './projection.js';
 export {
   activeSessions,

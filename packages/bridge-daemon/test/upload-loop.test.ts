@@ -9,7 +9,7 @@ import { SqliteOutbox, type OutboxCaptureInput } from '../src/outbox/sqlite-outb
 import { tick } from '../src/outbox/upload-loop.js';
 
 /**
- * Upload loop (spec outbox, task 6.4): claim up to 50 pending rows per tick,
+ * Outbox upload loop: claim up to 50 pending rows per tick,
  * send, split per-event answers into ack / reject / transport failure.
  * ack deletes the row; reject quarantines with the server-supplied reason;
  * failure releases back to pending with exponential backoff that gates the

@@ -1,16 +1,5 @@
 import { z } from 'zod';
 
-/**
- * Service configuration — the one place the environment is read.
- *
- * Every value is parsed and validated exactly once at startup (standard 12),
- * so request code handles a closed, typed object and never re-parses an
- * environment string. An invalid required value stops the process here with a
- * diagnostic naming every failing field: failing later, inside a request, is
- * not an option.
- */
-
-/** Boundaries keep the service honest on a single host: machine clients only. */
 const defaultPort = 8080;
 const defaultHost = '127.0.0.1';
 const defaultLogLevel = 'info';
@@ -31,8 +20,16 @@ export const apiConfigSchema = z
     log_redaction_allowlist: z.array(z.string().min(1).max(128)).max(64),
     max_body_bytes: z.int().min(1).max(104_857_600),
     shutdown_timeout_ms: z.int().min(1).max(300_000),
+    database_url: z
+      .url({ protocol: /^postgres(?:ql)?$/ })
+      .max(2_048)
+      .optional(),
   })
-  .meta({ description: 'API service startup configuration.', id: 'ApiConfig' });
+  .meta({
+    description:
+      'Validated API startup configuration; an absent database URL selects in-memory storage.',
+    id: 'ApiConfig',
+  });
 
 export type ApiConfig = z.infer<typeof apiConfigSchema>;
 
@@ -46,35 +43,6 @@ export class InvalidApiConfigError extends Error {
   }
 }
 
-interface EnvSource {
-  readonly port: string | undefined;
-  readonly host: string | undefined;
-  readonly logLevel: string | undefined;
-  readonly allowlist: string | undefined;
-  readonly maxBodyBytes: string | undefined;
-  readonly shutdownTimeoutMs: string | undefined;
-}
-
-const envKeys = {
-  port: 'NAVIS_API_PORT',
-  host: 'NAVIS_API_HOST',
-  logLevel: 'NAVIS_API_LOG_LEVEL',
-  allowlist: 'NAVIS_API_LOG_REDACTION_ALLOWLIST',
-  maxBodyBytes: 'NAVIS_API_MAX_BODY_BYTES',
-  shutdownTimeoutMs: 'NAVIS_API_SHUTDOWN_TIMEOUT_MS',
-} as const;
-
-function readEnv(env: Record<string, string | undefined>): EnvSource {
-  return {
-    port: env[envKeys.port],
-    host: env[envKeys.host],
-    logLevel: env[envKeys.logLevel],
-    allowlist: env[envKeys.allowlist],
-    maxBodyBytes: env[envKeys.maxBodyBytes],
-    shutdownTimeoutMs: env[envKeys.shutdownTimeoutMs],
-  };
-}
-
 /** Comma-separated list: blanks and surrounding whitespace carry no meaning. */
 function parseAllowlist(raw: string): string[] {
   return raw
@@ -83,25 +51,24 @@ function parseAllowlist(raw: string): string[] {
     .filter((entry) => entry.length > 0);
 }
 
-/** Number conversion happens here, not in the schema: `NaN` from a non-numeric string then fails the integer check. */
+/** Preserve invalid numeric input as NaN so the startup schema rejects it. */
 function numberOr(raw: string | undefined, fallback: number): number {
   return raw === undefined ? fallback : Number(raw);
 }
 
-/**
- * Loads and validates configuration. Defaults are the self-hosted single-org
- * deployment; every override arrives through the environment.
- */
+/** Reads the environment once; invalid values produce field diagnostics without their contents. */
 export function loadApiConfig(env: Record<string, string | undefined> = process.env): ApiConfig {
-  const source = readEnv(env);
   const parsed = apiConfigSchema.safeParse({
-    port: numberOr(source.port, defaultPort),
-    host: source.host ?? defaultHost,
-    log_level: source.logLevel ?? defaultLogLevel,
+    port: numberOr(env['NAVIS_API_PORT'], defaultPort),
+    host: env['NAVIS_API_HOST'] ?? defaultHost,
+    log_level: env['NAVIS_API_LOG_LEVEL'] ?? defaultLogLevel,
     log_redaction_allowlist:
-      source.allowlist === undefined ? defaultRedactionAllowlist : parseAllowlist(source.allowlist),
-    max_body_bytes: numberOr(source.maxBodyBytes, defaultMaxBodyBytes),
-    shutdown_timeout_ms: numberOr(source.shutdownTimeoutMs, defaultShutdownTimeoutMs),
+      env['NAVIS_API_LOG_REDACTION_ALLOWLIST'] === undefined
+        ? defaultRedactionAllowlist
+        : parseAllowlist(env['NAVIS_API_LOG_REDACTION_ALLOWLIST']),
+    max_body_bytes: numberOr(env['NAVIS_API_MAX_BODY_BYTES'], defaultMaxBodyBytes),
+    shutdown_timeout_ms: numberOr(env['NAVIS_API_SHUTDOWN_TIMEOUT_MS'], defaultShutdownTimeoutMs),
+    database_url: env['DATABASE_URL'],
   });
   if (!parsed.success) {
     throw new InvalidApiConfigError(

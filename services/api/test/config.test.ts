@@ -52,4 +52,22 @@ describe('loadApiConfig', () => {
       /port.*max_body_bytes|max_body_bytes.*port/s,
     );
   });
+  it.each(['', 'not-a-url', 'https://example.invalid/db'])(
+    'rejects invalid DATABASE_URL: %j',
+    (databaseUrl) => {
+      expect(() => loadApiConfig({ DATABASE_URL: databaseUrl })).toThrow(InvalidApiConfigError);
+    },
+  );
+
+  it('retains an explicit PostgreSQL URL and never echoes an invalid secret', () => {
+    const databaseUrl = 'postgres://test:test@127.0.0.1:5432/navis_test';
+    expect(loadApiConfig({ DATABASE_URL: databaseUrl }).database_url).toBe(databaseUrl);
+    try {
+      loadApiConfig({ DATABASE_URL: 'invalid-test-secret' });
+      expect.fail('invalid configuration was accepted');
+    } catch (error) {
+      expect(error).toBeInstanceOf(InvalidApiConfigError);
+      expect(String(error)).not.toContain('invalid-test-secret');
+    }
+  });
 });

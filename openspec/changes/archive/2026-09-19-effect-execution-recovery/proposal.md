@@ -2,7 +2,7 @@
 
 ## Why
 
-The ledger records intent (R0-45), late cancel (R0-46), and pending recovery (R0-47), but it cannot tell "this effect was never attempted" apart from "this effect was attempted and then the process died before closure". That distinction is the entire point of the crash-recovery gate: an attempted-but-unclosed effect MUST NOT be re-executed by a runner that doesn't know whether the side effect already landed.
+The ledger records intent, late cancel, and pending recovery, but it cannot tell "this effect was never attempted" apart from "this effect was attempted and then the process died before closure". That distinction is the entire point of the crash-recovery gate: an attempted-but-unclosed effect MUST NOT be re-executed by a runner that doesn't know whether the side effect already landed.
 
 Without a visible `executing` marker, every recovery runner has to guess. Guessing duplicates externally-observable side effects.
 

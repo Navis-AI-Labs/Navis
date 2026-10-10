@@ -20,13 +20,13 @@
     "start": "node dist/platform/index.js"
   },
   "dependencies": {
-    "@navis/contracts": "workspace:*",
-    "zod": "4.4.3",
     "@navis/application": "workspace:*",
-    "@navis/domain": "workspace:*"
+    "@navis/contracts": "workspace:*",
+    "@navis/domain": "workspace:*",
+    "@navis/infrastructure": "workspace:*",
+    "zod": "4.4.3"
   },
   "devDependencies": {
-    "@types/node": "24.13.3",
-    "@navis/infrastructure": "workspace:*"
+    "@types/node": "24.13.3"
   }
 }

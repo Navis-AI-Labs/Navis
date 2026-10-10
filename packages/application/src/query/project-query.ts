@@ -1,17 +1,8 @@
-/**
- * The query read face: assembles the three time planes and the paginated
- * history slice from the event ledger, and the project directory page from
- * the membership table. All three are read-only; no command path runs here.
- *
- * The time planes are a *projection of the ledger*, never a summary the
- * service invents: the plane rows are anchored to seq + event_type +
- * occurred_at, and the caller decides what to consume. The replay path is
- * the audit — `getProjectState` returns exactly what a full replay of the
- * same ledger produces (standard 06: replay consistency).
- */
+/** Event-label views, filtered history pages, and membership-scoped project search. */
 
 import type { EventEnvelope, EventStore } from '@navis/domain';
 import { ProjectStateKernel } from '@navis/domain';
+import { parseCanonicalWorkEventPayload } from '@navis/contracts';
 import type {
   ContextEntry,
   ContextFilterType,
@@ -86,13 +77,7 @@ function admits(filter: ContextFilterType, envelope: EventEnvelope): boolean {
   return FILTER_PREFIXES[filter].some((prefix) => envelope.event_type.startsWith(prefix));
 }
 
-/**
- * Rebuilds the projection from the ledger. The snapshot is a cache: when the
- * store holds one whose cursor is the ledger head, the kernel seeds from it
- * and folds the tail; otherwise the whole log replays. Either path yields
- * the same projection — that equivalence is the replay invariant the kernel
- * itself verifies (`verifyIntegrity`).
- */
+/** Business version is derived from the complete ledger, not from a possibly stale snapshot. */
 async function rebuildProjection(
   store: EventStore,
   projectId: string,
@@ -111,6 +96,8 @@ async function rebuildProjection(
       state_version: e.state_version,
       schema_version: e.event_schema_version,
     })),
+    undefined,
+    parseCanonicalWorkEventPayload,
   );
   return { stateVersion: kernel.stateVersion };
 }
@@ -146,7 +133,7 @@ function inFamilies(families: readonly string[], eventType: string): boolean {
  * replaying the event ledger. The planes are ledger entries — seq +
  * event_type + occurred_at are the anchor, the label is a hint — and the
  * replay path is the audit: the state version equals a full replay of the
- * same log (standard 06).
+ * same log.
  */
 export async function getProjectState(
   store: EventStore,

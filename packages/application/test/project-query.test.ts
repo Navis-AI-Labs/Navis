@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { uuidv7 } from '@navis/domain';
+import {
+  ProjectStateKernel,
+  projectionSnapshotSchema,
+  serializeProjectionStateRecord,
+  uuidv7,
+} from '@navis/domain';
+import { parseCanonicalWorkEventPayload } from '@navis/contracts';
 import { InMemoryEventStore, InMemoryProjectDirectory } from '@navis/infrastructure';
 
 import { getProjectState, loadContext, searchProjects } from '../src/query/project-query.js';
@@ -413,5 +419,65 @@ describe('searchProjects', () => {
     await expect(
       searchProjects(d, PARTICIPANT, { query: 'merchant', cursor: bad, limit: 10 }),
     ).rejects.toThrow(/invalid project cursor/u);
+  });
+});
+
+describe('observation replay at the query boundary', () => {
+  it('validates persisted observations, including snapshot-covered history', async () => {
+    const store = await seededStore();
+    await append(store, 2, {
+      type: 'project.created',
+      payload: { project_id: PROJECT, title: 'project' },
+    });
+    await append(store, 3, {
+      type: 'user.message',
+      payload: { privacy: { char_length: 0, sha256: 'a'.repeat(64) } },
+    });
+    await expect(getProjectState(store, PROJECT)).resolves.toMatchObject({ state_version: 0 });
+    const events = (await store.loadEvents(PROJECT, 0)).map((e) => ({
+      seq: e.seq,
+      type: e.event_type,
+      data: e.payload,
+      actor: e.actor_participant_id,
+      at: e.occurred_at,
+      state_version: e.state_version,
+      schema_version: e.event_schema_version,
+    }));
+    const replayed = ProjectStateKernel.fromEvents(
+      events,
+      undefined,
+      parseCanonicalWorkEventPayload,
+    );
+    const snapshot = projectionSnapshotSchema.parse({
+      seq: replayed.currentSeq,
+      state_version: replayed.stateVersion,
+      schema_version: 1,
+      state: serializeProjectionStateRecord(replayed.projection),
+    });
+    const corrupted = events.map((event) =>
+      event.type === 'user.message' ? { ...event, data: { unexpected: true } } : event,
+    );
+    for (const cache of [undefined, snapshot]) {
+      expect(() =>
+        ProjectStateKernel.fromEvents(corrupted, cache, parseCanonicalWorkEventPayload),
+      ).toThrow('invalid event data at seq 3');
+    }
+    await append(store, 4, { type: 'user.message', payload: { unexpected: true } });
+    await expect(getProjectState(store, PROJECT)).rejects.toThrow('invalid event data at seq 4');
+    const withTail = [
+      ...events,
+      {
+        seq: 4,
+        type: 'user.message',
+        data: { unexpected: true },
+        actor: PARTICIPANT,
+        at: AT,
+        state_version: 0,
+        schema_version: 1,
+      },
+    ];
+    expect(() =>
+      ProjectStateKernel.fromEvents(withTail, snapshot, parseCanonicalWorkEventPayload),
+    ).toThrow('invalid event data at seq 4');
   });
 });

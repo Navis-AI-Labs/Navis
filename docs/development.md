@@ -15,6 +15,20 @@
 
 Code directories do not carry placeholder README files. A package manifest, explicit exports, tests, and generated contract artifacts document an activated code boundary; the architecture document records planned boundaries.
 
+## Verification environment
+
+Use Node.js 24.19.0 and pnpm 11.22.0 from `package.json` and CI. Package metadata and CI define the required versions. Check the executable selected by a runtime-manager shim before validation. Check both Node and pnpm versions before validation.
+
+For a run without PostgreSQL, remove `DATABASE_URL` from the test process environment. Integration suites treat an empty or whitespace-only value as unconfigured, while API startup rejects a supplied invalid database URL. A real PostgreSQL run requires an explicitly identified disposable test database; the suites apply migrations and leave test rows behind. Do not pass an empty connection string directly to the driver, which can select a default local database.
+
+Tests and coverage measure their selected sources. A process-entry smoke test, a built-package installation check, and a client-to-service contract test are separate evidence. Preserve a running checkout's build artifacts when investigating which version it executed.
+
+## Local API and PostgreSQL
+
+After installing the pinned dependencies, run `pnpm build`, then `docker compose up -d`. The API mounts this checkout and uses its built files; it is reachable at `http://127.0.0.1:8080`, with PostgreSQL on loopback port 55432. Rebuild and restart the API after changing source. The local Compose image uses the Node 24 major tag; release artifacts and exact runtime provenance remain separate work.
+
+The Compose database is disposable development data. No named persistent volume is configured; `docker compose down --volumes` removes its attached anonymous storage. Do not use it for shared or authoritative data. Validation should use its own disposable database, independent of a running development stack.
+
 ## OpenSpec flow
 
 1. Create or update a change under `openspec/changes/<change-id>/`.

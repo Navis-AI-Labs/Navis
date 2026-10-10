@@ -316,7 +316,8 @@ describe('InMemoryEventStore conformance', () => {
   conformanceSuite(() => new InMemoryEventStore());
 });
 
-const databaseUrl = process.env['DATABASE_URL'];
+const configuredDatabaseUrl = process.env['DATABASE_URL']?.trim();
+const databaseUrl = configuredDatabaseUrl === '' ? undefined : configuredDatabaseUrl;
 describe.runIf(databaseUrl !== undefined)('PostgresEventStore conformance', () => {
   const sql = databaseUrl === undefined ? undefined : createConnection(databaseUrl);
   beforeAll(async () => {

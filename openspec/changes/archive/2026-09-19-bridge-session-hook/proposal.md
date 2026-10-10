@@ -2,7 +2,7 @@
 
 ## Why
 
-R0-25 requires the SessionStart hook contract: when a local agent runtime starts a session, a hook invokes `navis-bridge ensure-running` so the Bridge is always up before any client reads or writes. The hook shape and its response grammar must live in `packages/contracts` next to the other public contracts, or every R1 agent runtime would invent its own.
+The local integration boundary requires the SessionStart hook contract: when a local agent runtime starts a session, a hook invokes `navis-bridge ensure-running` so the Bridge is always up before any client reads or writes. The hook shape and its response grammar must live in `packages/contracts` next to the other public contracts, or every R1 agent runtime would invent its own.
 
 ## What changes
 

@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { uuidv7 } from '@navis/domain';
+import { createConnection, runMigrations } from '../src/persistence/postgres/connection.js';
 import type postgres from 'postgres';
 
 import { InMemoryDeviceAuth } from '../src/persistence/in-memory/in-memory-device-auth.js';
@@ -158,6 +160,47 @@ describe('PostgresDeviceAuth (fake wire)', () => {
     };
     return { sql: tag as unknown as postgres.Sql, texts };
   }
+
+  it('decodes driver dates only in timestamp columns', async () => {
+    const { sql } = fakeSql([
+      {
+        contains: 'FROM device_codes',
+        rows: [
+          {
+            ...code(),
+            created_at: new Date(AT),
+            expires_at: new Date(AT),
+            consumed_at: new Date(AT),
+          },
+        ],
+      },
+    ]);
+    expect(await new PostgresDeviceAuth(sql).getDeviceCode('dc')).toEqual(
+      code({ consumed_at: AT }),
+    );
+  });
+
+  it('rejects Date values in text columns', async () => {
+    const { sql } = fakeSql([
+      { contains: 'FROM device_codes', rows: [{ ...code(), user_code: new Date(AT) }] },
+    ]);
+    await expect(new PostgresDeviceAuth(sql).getDeviceCode('dc')).rejects.toThrow(
+      'expected a text column',
+    );
+  });
+
+  it.each(['invalid instant', new Date(NaN)])(
+    'rejects malformed timestamp columns: %s',
+    async (createdAt) => {
+      const { sql } = fakeSql([
+        { contains: 'FROM device_codes', rows: [{ ...code(), created_at: createdAt }] },
+      ]);
+      await expect(new PostgresDeviceAuth(sql).getDeviceCode('dc')).rejects.toThrow();
+      await expect(new PostgresDeviceAuth(sql).getDeviceCode('dc')).rejects.not.toMatchObject({
+        name: 'ZodError',
+      });
+    },
+  );
 
   it('inserts a pending device code with a null participant', async () => {
     const writes: { text: string; values: unknown[] }[] = [];
@@ -405,5 +448,26 @@ describe('PostgresDeviceAuth (fake wire)', () => {
     await expect(store.getKeyById('none')).resolves.toBeNull();
     await expect(store.getDevice('none')).resolves.toBeNull();
     await expect(store.getDeviceCode('none')).resolves.toBeNull();
+  });
+});
+
+const configuredDatabaseUrl = process.env['DATABASE_URL']?.trim();
+const databaseUrl = configuredDatabaseUrl === '' ? undefined : configuredDatabaseUrl;
+describe.runIf(databaseUrl !== undefined)('PostgresDeviceAuth timestamp round-trip', () => {
+  const sql = databaseUrl === undefined ? undefined : createConnection(databaseUrl);
+  beforeAll(async () => {
+    if (sql !== undefined) await runMigrations(sql);
+  });
+  afterAll(async () => {
+    if (sql !== undefined) await sql.end({ timeout: 0 });
+  });
+  it('reads actual timestamptz values as port instants', async () => {
+    if (sql === undefined) throw new Error('an explicit test database is required');
+    const store = new PostgresDeviceAuth(sql);
+    const row = code({ device_code: uuidv7(), user_code: uuidv7() });
+    await store.putDeviceCode(row);
+    expect(await store.getDeviceCode(row.device_code)).toEqual(row);
+    await store.consumeDeviceCode(row.device_code, AT);
+    expect((await store.getDeviceCode(row.device_code))?.consumed_at).toBe(AT);
   });
 });

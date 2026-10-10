@@ -5,6 +5,10 @@ import type { StateEvent } from './events.js';
 import { projectionSchema, capturePolicySchema, type KernelProjection } from './projection.js';
 import { instantSchema, MILLISECONDS_PER_DAY } from '../schema/time.js';
 
+/** Initial capture windows; projects can override them through a policy command. */
+export const CAPTURE_EVENT_COUNT_WINDOW_DEFAULT = 500;
+export const CAPTURE_TIME_WINDOW_DAYS_DEFAULT = 7;
+
 const PROJECTION_STATE_KEYS = Object.freeze(Object.keys(projectionSchema.shape));
 
 /** Capture-anchor state: the sequence and logical time of the last capture. */

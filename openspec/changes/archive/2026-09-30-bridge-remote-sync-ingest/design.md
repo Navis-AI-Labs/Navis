@@ -2,7 +2,7 @@
 
 ## Context recap
 
-This change turns the closed Bridge research record into the first runnable two-sided Navis. The domain kernel, contracts, and infrastructure already exist; this change wires accepted behavior to a service and a local daemon. No domain behavior changes.
+This change defines the service and local daemon integration. The domain kernel, contracts, and infrastructure already exist; this change wires accepted behavior to a service and a local daemon. No domain behavior changes.
 
 ## Ownership and dependency direction
 
@@ -59,7 +59,7 @@ ADR-0004 forbids selecting a runtime before an accepted use case; this change is
 
 ### δ2 — Daemon persistence: SQLite WAL (adjudicated, recorded)
 
-The research record adjudicated SQLite in WAL mode with `synchronous=NORMAL`, one transaction per event append, evidenced by crash-injection and concurrent-writer experiments. Recorded as **ADR-0012 (daemon persistence)** for this repository. `node:sqlite` is the driver (built into Node; no native addon build step), matching the existing Postgres path decision.
+The design selects SQLite in WAL mode with `synchronous=NORMAL`, one transaction per event append, evidenced by crash-injection and concurrent-writer experiments. Recorded as **ADR-0012 (daemon persistence)** for this repository. `node:sqlite` is the driver (built into Node; no native addon build step), matching the existing Postgres path decision.
 
 ### δ3 — Real-time channel: not this change
 
@@ -135,6 +135,6 @@ Per `docs/standards/00-index.md`, this change selects:
 
 ## Evidence
 
-- Research record: the completed research repository that closed this design space (binding, Outbox, auth, loading, cross-platform, experiment evidence).
+- Design rationale and alternatives are recorded in this change's `design.md`.
 - Main repo: 740 passed / 43 skipped, 100% line coverage, OpenSpec strict 14/14.
 - Existing accepted specs consumed: `work-contracts` (event envelope), `command-intake-idempotency` (idempotency envelope pattern), `project-state-kernel` (replay + projection), `bridge-session-hook` (hook schema being MODIFIED here), `bridge-lifecycle` (single-instance daemon contract).

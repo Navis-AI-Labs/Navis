@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ProjectStateKernel, uuidv7 } from '../src/index.js';
 
 /*
- * Regression pin for change effect-execution-recovery (R0-48 analogue):
+ * Regression pin for change effect-execution-recovery:
  * life-cycle now has a real 'executing' state; closeEffect refuses
  * unknown (not-attempted) rows, refuse second begin, and supports an
  * auditable reset path. replay(fromEvents) yields identical answers.

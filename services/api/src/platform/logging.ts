@@ -1,13 +1,6 @@
 import type { ApiConfig } from './config.js';
 
-/**
- * Structured logging — one JSON object per line.
- *
- * Every line carries the request correlation (`request_id`, `trace_id`) that
- * flows from transport entry down through use cases. Fields the service does
- * not name are masked before writing, so a stray payload, token, or path can
- * only reach a log line through a deliberate allowlist entry (standard 03).
- */
+/** Writes structured JSON lines, retaining correlation when supplied and masking fields outside the allowed set. */
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -18,11 +11,7 @@ const levelRank: Record<LogLevel, number> = {
   error: 40,
 };
 
-/**
- * Structural fields the logger itself owns. They are never client content:
- * correlation ids arrive validated from the trace-context module, and the
- * error fields describe a failure this service produced.
- */
+/** These fields bypass redaction. Callers must validate correlation identifiers and keep payload content out of them. */
 const structuralFields = new Set([
   'ts',
   'level',
@@ -69,7 +58,7 @@ export class StructuredLogger {
     this.#emit('warn', context, message, extra);
   }
 
-  /** Records a failed outcome that needs attention (standard 03: `error` is not for recoverable conditions). */
+  /** Records an outcome requiring attention. */
   error(context: LogContext, message: string, extra?: Record<string, unknown>): void {
     this.#emit('error', context, message, extra);
   }

@@ -9,6 +9,7 @@ import {
   canonicalWorkEventTypeSchema,
   encodeCanonicalWorkEvent,
   parseCanonicalWorkEvent,
+  parseCanonicalWorkEventPayload,
 } from '../src/work-event.js';
 import { canonicalWorkEventFixtures } from './work-event.fixtures.js';
 
@@ -173,4 +174,46 @@ describe('session-internal events', () => {
     };
     expect('body' in privacyOf(parseCanonicalWorkEvent(withExtra))).toBe(false);
   });
+});
+
+describe('persisted work event payload validation', () => {
+  it('shares the strict payload grammar for every event variant', () => {
+    for (const fixture of canonicalWorkEventFixtures) {
+      expect(parseCanonicalWorkEventPayload(fixture.event_type, fixture.payload)).toEqual(
+        fixture.payload,
+      );
+      expect(() =>
+        parseCanonicalWorkEventPayload(fixture.event_type, {
+          ...fixture.payload,
+          undeclared: true,
+        }),
+      ).toThrow();
+    }
+  });
+
+  it('refuses unsupported types and invalid declared fields', () => {
+    expect(() => parseCanonicalWorkEventPayload('unknown.event', {})).toThrow(
+      'unsupported work event type',
+    );
+    expect(() => parseCanonicalWorkEventPayload('user.message', { unexpected: true })).toThrow();
+    expect(() =>
+      parseCanonicalWorkEventPayload('user.message', {
+        privacy: { char_length: -1, sha256: 'bad' },
+      }),
+    ).toThrow();
+  });
+
+  it.each(['user.message', 'agent.message', 'tool.call.requested', 'tool.call.result'])(
+    '%s rejects nested additions in production and strips them in consumption',
+    (type) => {
+      const fixture = fixtureOfType(type);
+      const extra = {
+        ...fixture,
+        payload: { ...fixture.payload, privacy: { ...privacyOf(fixture), undeclared: true } },
+      };
+      expect(() => encodeCanonicalWorkEvent(extra)).toThrow();
+      expect(() => parseCanonicalWorkEventPayload(type, extra.payload)).toThrow();
+      expect(parseCanonicalWorkEvent(extra)).toEqual(fixture);
+    },
+  );
 });

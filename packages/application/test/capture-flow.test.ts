@@ -378,7 +378,8 @@ function captureSuite(makeStore: () => EventStore): void {
 describe('capture with InMemoryEventStore', () => {
   captureSuite(() => new InMemoryEventStore());
 });
-const databaseUrl = process.env['DATABASE_URL'];
+const configuredDatabaseUrl = process.env['DATABASE_URL']?.trim();
+const databaseUrl = configuredDatabaseUrl === '' ? undefined : configuredDatabaseUrl;
 describe.runIf(databaseUrl !== undefined)('capture with PostgreSQL', () => {
   const sql = databaseUrl === undefined ? undefined : createConnection(databaseUrl);
   beforeAll(async () => {

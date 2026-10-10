@@ -2,7 +2,7 @@
 
 ## Why
 
-The Bridge process (the relay between a local agent runtime and the kernel) cannot first appear in the code in R1. By the DEC-0003 scoping and the R0-22 through R0-25 task rows, R0 admits a verifiable lifecycle contract — single socket path, single-process guarantee, and a deterministic daemon-detection-and-restart story. This change admits the _domain-level contract_, not the transport. It may be replaced by a real socket implementation when R1 arrives.
+The Bridge process (the relay between a local agent runtime and the kernel) cannot first appear in the code in R1. The local integration boundary needs a verifiable lifecycle contract — single socket path, single-process guarantee, and a deterministic daemon-detection-and-restart story. This change admits the _domain-level contract_, not the transport. It may be replaced by a real socket implementation when R1 arrives.
 
 ## What changes
 

@@ -25,7 +25,7 @@ import {
 } from './tracing.js';
 
 /**
- * HTTP transport — a thin `node:http` adapter over public contracts (ADR-0011).
+ * HTTP transport — a thin `node:http` adapter over public contracts.
  *
  * No framework dispatches, serializes, or maps errors on our behalf: the route
  * table is keyed by `METHOD + path`, the body reader is bounded, and every
@@ -42,11 +42,7 @@ interface ListenHandle {
   close(): void;
 }
 
-/**
- * A business route: method, path (literal or with `:param` segments), whether
- * it needs a body, and its handler. Path params — only `:projectId` today —
- * are extracted into the handler input, never read from the query string.
- */
+/** An operation handler receives decoded parameters separately from credential headers. */
 export interface ServiceRoute {
   readonly method: string;
   readonly path: string;
@@ -118,16 +114,7 @@ export class ApiServer {
     });
   }
 
-  /**
-   * Graceful shutdown: stop intake, drain in-flight requests, close the port.
-   * The readiness probe flips first so a load balancer stops sending traffic;
-   * a bounded timeout keeps a stuck request from wedging the process,
-   * destroying lingering sockets when it elapses (standard 12).
-   *
-   * The listening socket is held until the drain finishes: closing it up front
-   * would also refuse new connections queued behind the accept loop, which
-   * would defeat a drain under any real load.
-   */
+  /** Rejects non-probe requests during a bounded drain, then closes remaining connections at the deadline. */
   close(): Promise<void> {
     if (this.#isShuttingDown) {
       return Promise.resolve();
@@ -246,12 +233,7 @@ export class ApiServer {
     });
   }
 
-  /**
-   * Extracts path params and query-string fields into the handler input. Path
-   * params are authoritative for identity (`:projectId`); the query string
-   * carries filters, cursors, and limits. A route with neither receives
-   * `undefined`, exactly as before.
-   */
+  /** Decodes path and query parameters. Operation validation belongs to the route. */
   #readPathParams(route: ServiceRoute, req: IncomingMessage): Record<string, unknown> | undefined {
     const url = req.url ?? '/';
     const qIndex = url.indexOf('?');
@@ -290,7 +272,7 @@ export class ApiServer {
   /**
    * Reads a JSON body. The content-length check refuses an oversized request
    * before a single byte is buffered; the running total guards against a
-   * header that lies or is absent (standard 10: no unbounded buffering).
+   * header that lies or is absent (bounded buffering).
    */
   #readBody(req: IncomingMessage): Promise<unknown> {
     return new Promise<unknown>((resolve, reject) => {

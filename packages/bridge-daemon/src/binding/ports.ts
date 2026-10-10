@@ -1,12 +1,4 @@
-/**
- * Local binding table (spec §5: binding is local and never uploaded).
- *
- * Exactly eleven columns, no more, no less — the table is a local address
- * book for "this directory → this project", owned by the daemon's SQLite
- * database and never transmitted. The id and foreign keys are the only
- * pieces the server ever knows about (they identify what the server itself
- * issued); local paths stay local.
- */
+/** Device-local mapping from a repository declaration to verified project membership. Paths and fingerprints remain local. */
 
 export interface BindingRecord {
   /** The mapping id (uuid), minted on bind and stable until rebind. */
@@ -21,21 +13,21 @@ export interface BindingRecord {
   readonly device_id: string;
   /** The participant verified at bind; the server owns this truth. */
   readonly participant_id: string;
-  /** Optional remote URL override from the toml; otherwise the daemon default. */
+  /** Optional instance URL from the repository declaration. */
   readonly remote: string | null;
-  /** Owner-set privacy boundary; drives the Outbox's upload vs. keep-local choice. */
+  /** Local policy used to determine upload eligibility. */
   readonly privacy_class: 'local-only' | 'metadata' | 'work';
   /** ISO 8601 timestamp the binding was verified. */
   readonly bound_at: string;
   /** Server-side state version the daemon last loaded (starts null). */
   readonly last_loaded_state_version: number | null;
-  /** Reserved for nested-toml support; always null today (design δ3). */
+  /** Reserved for nested-toml support; always null today. */
   readonly parent_binding_id: null;
 }
 
 export interface BindingTablePort {
   put(record: BindingRecord): Promise<void>;
   get(tomlPath: string, deviceId: string): Promise<BindingRecord | null>;
-  /** Every live binding for a device, refreshed order newest first. */
+  /** Stored bindings for a device, newest binding time first. */
   listForDevice(deviceId: string): Promise<readonly BindingRecord[]>;
 }

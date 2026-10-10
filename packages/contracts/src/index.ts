@@ -65,6 +65,7 @@ export {
   workEventReviewStatusSchema,
   encodeCanonicalWorkEvent,
   parseCanonicalWorkEvent,
+  parseCanonicalWorkEventPayload,
   UnsupportedWorkEventVersionError,
   type CanonicalWorkEvent,
 } from './work-event.js';

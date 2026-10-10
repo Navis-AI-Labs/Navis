@@ -7,8 +7,7 @@
  * a participant, and this port answers which projects that participant may
  * read. Deny is the default — the membership row is the only grant, and a
  * caller must not be able to distinguish "no such project" from "not your
- * project" (standard 04: authorization tests prove cross-scope isolation, not
- * only successful access).
+ * project" (including isolation on denied reads).
  *
  * The port is deliberately small: search is a directory concern (titles,
  * statuses, state versions — all projection caches), not a domain concern.

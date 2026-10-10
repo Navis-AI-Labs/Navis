@@ -6,7 +6,7 @@
   "description": "Navis CLI: stateless client for the per-user bridge daemon (init / status / session / bridge link / bridge unlink / bridge login / hook).",
   "exports": {
     ".": {
-      "types": "./dist/index.js",
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     }
   },

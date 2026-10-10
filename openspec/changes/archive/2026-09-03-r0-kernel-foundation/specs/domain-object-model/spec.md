@@ -34,7 +34,7 @@ Authority records must stay trustworthy for their entire lifetime — never sile
 
 ### Requirement: core object types follow the accepted kernel schema baseline
 
-Every business fact, human judgment, withheld concern, and delivery promise in Navis is expressed through the accepted object model — nothing else is authoritative, and this repository does not invent its own variant of it. The system SHALL define runtime-validated schemas (zod) for the 8 core object types (Project, Work, TaskSpace, Asset, Acceptance, Delivery, WorkRun, Hold) plus the Participant registry type, exactly as the accepted research baseline specifies them. A baseline guard test SHALL fail on any deviation from the accepted baseline (extra field, missing field, missing enum value, extra enum value). Invalid construction input SHALL be rejected with a structured error naming the field and reason.
+Every business fact, human judgment, withheld concern, and delivery promise in Navis is expressed through the accepted object model — nothing else is authoritative, and this repository does not invent its own variant of it. The system SHALL define runtime-validated schemas (zod) for the 8 core object types (Project, Work, TaskSpace, Asset, Acceptance, Delivery, WorkRun, Hold) plus the Participant registry type, with the fields and constraints specified below. A baseline guard test SHALL fail on any deviation from the accepted baseline (extra field, missing field, missing enum value, extra enum value). Invalid construction input SHALL be rejected with a structured error naming the field and reason.
 
 Field baseline (all enums exactly as accepted):
 

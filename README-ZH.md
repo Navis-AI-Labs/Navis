@@ -56,7 +56,7 @@ Agent 进入 Project 工作，完成后将成果与经验沉淀回 Project。Age
 
 ## 当前状态
 
-核心设计已完成，实现正在推进中。
+核心领域模型与 API 服务组装已有实现并通过本地验证。CLI/Bridge 接入和端到端验收、交付流程仍未完成。当前工程进度见[架构现状](docs/architecture.md)。
 
 欢迎 Issue、Discussion 或直接参与项目。
 

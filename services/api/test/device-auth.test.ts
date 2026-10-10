@@ -296,16 +296,19 @@ describe('device registration and revocation', () => {
     );
     expect(revoked['revoked']).toBe(true);
 
-    const after = dataOf((await fx.get('/api/devices', header)).body);
-    expect(after['devices']).toEqual([]);
+    const after = await fx.get('/api/devices', header);
+    expect(after.status).toBe(401);
+    expect(after.body).toMatchObject({ detail: 'device-auth/device-revoked' });
   });
 
   it('denies an unknown key without revealing whether the id existed', async () => {
     const fx = openRoutes();
-    const listed = dataOf(
-      (await fx.get('/api/devices', 'Bearer 01924a61-7a1b-7c2d-8e3f-000000009999.unknown')).body,
+    const listed = await fx.get(
+      '/api/devices',
+      'Bearer 01924a61-7a1b-7c2d-8e3f-000000009999.unknown',
     );
-    expect(listed['devices']).toEqual([]);
+    expect(listed.status).toBe(401);
+    expect(listed.body).toMatchObject({ detail: 'device-auth/key-invalid' });
   });
 
   it('rejects a registration call that lacks a bearer token', async () => {
@@ -321,16 +324,16 @@ describe('device registration and revocation', () => {
       device_id: '01924a61-7a1b-7c2d-8e3f-000000000001',
     });
 
-    expect(res.status).toBe(200);
-    expect(dataOf(res.body)['revoked']).toBe(false);
+    expect(res.status).toBe(401);
+    expect(res.body).toMatchObject({ detail: 'device-auth/key-invalid' });
   });
 
   it('denies a malformed authorization header', async () => {
     const fx = openRoutes();
-    const listed = dataOf((await fx.get('/api/devices', 'not-a-bearer')).body);
-    expect(listed['devices']).toEqual([]);
-
-    const noHeader = dataOf((await fx.get('/api/devices')).body);
-    expect(noHeader['devices']).toEqual([]);
+    for (const header of ['not-a-bearer', undefined]) {
+      const listed = await fx.get('/api/devices', header);
+      expect(listed.status).toBe(401);
+      expect(listed.body).toMatchObject({ detail: 'device-auth/key-invalid' });
+    }
   });
 });

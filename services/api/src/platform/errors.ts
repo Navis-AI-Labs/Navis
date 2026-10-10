@@ -7,7 +7,7 @@ import { createProblemDetails, type ProblemDetails } from '@navis/contracts';
  *
  * Public failures follow RFC 9457 through the contracts package: a stable
  * machine `code`, a human-safe `title`, and never a stack trace, query text,
- * credential, or internal path (standard 03). A failure this module does not
+ * credential, or internal path. A failure this module does not
  * recognize becomes an internal error with no echo of the original message,
  * because that message is untrusted evidence rather than client-facing detail.
  */
@@ -128,7 +128,7 @@ export interface RequestContextLike {
   trace_id?: string;
 }
 
-/** Problem Details `type` URI for a machine code. Stable across services; does not dereference. */
+/** Refuses an unsupported wire contract version and reports the supported range. */
 export class UnsupportedContractVersionError extends ServiceError {
   override readonly name = 'UnsupportedContractVersionError' as const;
   readonly status = 400 as const;
@@ -143,6 +143,7 @@ export class UnsupportedContractVersionError extends ServiceError {
   }
 }
 
+/** Stable Problem Details type URI for a machine code; does not dereference. */
 export function problemType(code: string): string {
   return `urn:navis:problem:${code.toLowerCase()}`;
 }
@@ -156,13 +157,7 @@ function bounded(value: string, limit: number): string {
   return value.length <= limit ? value : value.slice(0, limit);
 }
 
-/**
- * Maps any thrown value to public Problem Details.
- *
- * Known service errors keep their status and detail; anything else becomes a
- * 500 whose detail is intentionally absent — the original message is logged
- * server-side, never shipped to a client that could probe internals with it.
- */
+/** Maps known service errors to their public status and detail. Unknown failures become a generic 500 without exposing their message. */
 export function toProblemDetails(error: unknown, context: RequestContextLike): ProblemDetails {
   const serviceError = error instanceof ServiceError ? error : new InternalServerError(error);
   const fields: Record<string, unknown> = {

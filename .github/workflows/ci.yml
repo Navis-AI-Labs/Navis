@@ -81,20 +81,22 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Build all packages
         run: pnpm build
-      - name: Run full suite with DATABASE_URL (with build)
-        run: pnpm vitest run
+      - name: Run full suite against PostgreSQL
+        run: pnpm exec vitest run --reporter=default --reporter=json --outputFile.json="${{ runner.temp }}/navis-postgres-tests.json"
         env:
           DATABASE_URL: postgres://navis:navis@127.0.0.1:5432/navis_test
-      - name: Fail if any test was skipped
+      - name: Require a successful report with zero skipped tests
         if: always()
-        shell: bash
+        env:
+          NAVIS_TEST_REPORT: ${{ runner.temp }}/navis-postgres-tests.json
         run: |
-          pnpm vitest run 2>&1 | tee /tmp/vitest-out.txt || true
-          SKIPPED=$(grep -Eo 'Tests[[:space:]]+[0-9]+ passed \| [0-9]+ skipped' /tmp/vitest-out.txt | grep -Eo '[0-9]+ skipped' | grep -Eo '^[0-9]+' || echo "0")
-          if [[ "${SKIPPED}" -ne 0 ]]; then
-            echo "::error::${SKIPPED} tests skipped — the Postgres lane must never skip"
-            exit 1
-          fi
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const report = JSON.parse(readFileSync(process.env.NAVIS_TEST_REPORT, "utf8"));
+            if (report.success !== true || !Number.isInteger(report.numTotalTests) || report.numTotalTests < 1 || report.numPendingTests !== 0 || report.numPassedTests !== report.numTotalTests) {
+              throw new Error("PostgreSQL validation requires all tests to pass with zero skips");
+            }
+          '
 
   audit:
     name: Audit production dependencies

@@ -18,13 +18,30 @@ import type {
 } from './projection.js';
 import { canonicalEquals, deepFreeze, immutableCopy } from './canonical.js';
 import { EventHistory, verifyEventHistory } from './event-history.js';
-import type { StateEvent } from './events.js';
+import {
+  KERNEL_EVENT_TYPES,
+  STATE_EVENT_SCHEMA_VERSION,
+  isStateMaterialEvent,
+  type KernelEventType,
+  type ObservationValidator,
+  type StateEvent,
+} from './events.js';
 import { parseEventData } from './event-data.js';
 import { scopeVisibleForProject } from './scope-visibility.js';
-import { extractProjectionState, validateSnapshotUsability } from './snapshot.js';
+import {
+  CAPTURE_EVENT_COUNT_WINDOW_DEFAULT,
+  CAPTURE_TIME_WINDOW_DAYS_DEFAULT,
+  extractProjectionState,
+  validateSnapshotUsability,
+} from './snapshot.js';
 import type { ProjectionSnapshot } from '../ports/event-store.js';
 import { kernelErrors, type KernelError } from '../errors/kernel.js';
-import { assertTransition, assetSchema, type Asset } from '../schema/asset.js';
+import {
+  assertTransition,
+  assetSchema,
+  COMPETITIVE_GRACE_PERIOD_DAYS,
+  type Asset,
+} from '../schema/asset.js';
 import { uuidv7, uuidv7Schema } from '../schema/ids.js';
 import { MILLISECONDS_PER_DAY, instantSchema } from '../schema/time.js';
 import { intendedDirectionSchema } from '../schema/intended-direction.js';
@@ -55,84 +72,10 @@ import {
   strongestActiveMode,
 } from './intervention.js';
 
-/**
- * Authority for one project: commands enforce policy and append facts;
- * replay alone updates the projection. Business denials return registry
- * errors, while invalid persisted data raises an integrity error.
- */
 /** Serialized UTF-8 budget for an Equip's verified fact references. */
 export const EQUIP_SIZE_BUDGET = 64 * 1024;
-/** Retention window during which a competitive result may be reactivated. */
-export const COMPETITIVE_GRACE_PERIOD_DAYS = 90;
-/** Schema version of the kernel's event representation. */
-export const STATE_EVENT_SCHEMA_VERSION = 1;
-/**
- * Accepted capture-window defaults, seeded into the policy row at project
- * creation. Overridable per project via the human-gated
- * `updatePolicy` command; a policy update applies forward only.
- */
-export const CAPTURE_EVENT_COUNT_WINDOW_DEFAULT = 500;
-export const CAPTURE_TIME_WINDOW_DAYS_DEFAULT = 7;
-
-/** The closed event vocabulary the kernel emits. */
-export const KERNEL_EVENT_TYPES = [
-  'participant.registered',
-  'project.created',
-  'project.boundary_updated',
-  'project.policy_updated',
-  'project.status_changed',
-  'work.created',
-  'work.redirected',
-  'work.status_changed',
-  'asset.created',
-  'asset.lifecycle_changed',
-  'asset.purged',
-  'acceptance.recorded',
-  'hold.registered',
-  'hold.activated',
-  'hold.resolved',
-  'hold.accepted',
-  'hold.dormanted',
-  'hold.invalidated',
-  'checkpoint.created',
-  'equip.issued',
-  'equip.budget_exceeded',
-  'return.absorbed',
-  'return.rejected',
-  'return.conflict_marked',
-  'effect.recorded',
-  'effect.intent_recorded',
-  'effect.closed',
-  'effect.cancel_recorded',
-  'effect.execution_begun',
-  'effect.execution_reset',
-  'delivery.recorded',
-  'delivery.confirmed',
-  'direction.proposed',
-  'direction.resolved',
-  'workrun.started',
-  'workrun.transitioned',
-  'intervention.session_opened',
-  'intervention.session_closed',
-] as const;
-
-export type KernelEventType = (typeof KERNEL_EVENT_TYPES)[number];
-
 /** The hold-status-carrying subset of the kernel event vocabulary. */
 type HoldEventType = Extract<KernelEventType, `hold.${string}`>;
-
-/**
- * State-material events are the only events that advance
- * project_state_version: boundary updates (goal, acceptance criteria,
- * constraints — the Project's direction fields) and project status
- * changes. Acceptance-criteria structure changes ride the boundary event
- * (criteria are direction fields carried by it). Everything else advances
- * only the event seq and repeats the current version.
- */
-const STATE_MATERIAL_EVENTS: ReadonlySet<string> = new Set([
-  'project.boundary_updated',
-  'project.status_changed',
-]);
 
 /** Hold event type keyed by target status: the emitted event is the transition. */
 const HOLD_EVENT_TYPE: Readonly<Record<HoldStatus, KernelEventType>> = Object.freeze({
@@ -299,7 +242,6 @@ function restoreThenFold(
   events: readonly StateEvent[],
   snapshot: ProjectionSnapshot,
 ): KernelProjection {
-  validateEventLog(events);
   const usability = validateSnapshotUsability(snapshot, events, STATE_EVENT_SCHEMA_VERSION);
   if (!usability.ok) {
     throw new Error(`unusable snapshot: ${usability.reason}`);
@@ -315,8 +257,11 @@ function restoreThenFold(
   return d;
 }
 
-/** Validates the complete ledger before any snapshot can seed a projection. */
-function validateEventLog(events: readonly StateEvent[]): void {
+/** Validates the entire log, including payloads already covered by a snapshot. */
+function validateEventLog(
+  events: readonly StateEvent[],
+  validateObservation: ObservationValidator | undefined,
+): void {
   const integrity = verifyEventHistory(events);
   if (!integrity.ok) {
     throw new Error(`invalid event log at seq ${String(integrity.atSeq)}: ${integrity.reason}`);
@@ -327,18 +272,22 @@ function validateEventLog(events: readonly StateEvent[]): void {
     if (event.schema_version !== STATE_EVENT_SCHEMA_VERSION) {
       throw new Error(`invalid event log: unsupported schema version at seq ${String(event.seq)}`);
     }
-    if (!KERNEL_EVENT_TYPES.includes(event.type as KernelEventType)) {
-      throw new Error(`invalid event: unknown event type ${event.type}`);
-    }
+    const kernelEvent = KERNEL_EVENT_TYPES.includes(event.type as KernelEventType);
     try {
-      parseEventData(event.type, event.data);
+      if (kernelEvent) {
+        parseEventData(event.type, event.data);
+      } else if (validateObservation === undefined) {
+        throw new Error(`invalid event: unknown event type ${event.type}`);
+      } else {
+        validateObservation(event.type, event.data);
+      }
     } catch (error) {
       const detail = error instanceof Error ? error.message : 'schema violation';
       throw new Error(`invalid event data at seq ${String(event.seq)}: ${detail}`, {
         cause: error,
       });
     }
-    if (STATE_MATERIAL_EVENTS.has(event.type)) stateVersion += 1;
+    if (isStateMaterialEvent(event.type)) stateVersion += 1;
     if (event.state_version !== stateVersion) {
       throw new Error(`invalid event log: state-version mismatch at seq ${String(event.seq)}`);
     }
@@ -363,17 +312,13 @@ function must<O>(row: O | null | undefined, what: string): O {
   return row;
 }
 
-/**
- * The single replay applier. Both the live append path and the full
- * rebuild fold events through THIS function — replay identity holds by
- * construction and is verified via canonical JSON equality.
- *
- * Project time (`updated_at`/`updated_by`) is written EXCLUSIVELY here,
- * from each event's at/actor — command paths never touch those fields
- * (guard-tested). The projection's current_state_version is likewise
- * synced here from the event envelope.
- */
+/** Shared folding path for live commands and recovery. Only this path writes projection revision and audit-cache fields. */
 function applyEvent(d: MutableProjection, e: StateEvent): void {
+  if (!KERNEL_EVENT_TYPES.includes(e.type as KernelEventType)) {
+    // Replay validated observations before folding; live commands emit only kernel events.
+    d.seq = e.seq;
+    return;
+  }
   const data = e.data;
   switch (e.type) {
     case 'participant.registered': {
@@ -833,14 +778,14 @@ function applyEvent(d: MutableProjection, e: StateEvent): void {
       if (data['was_takeover'] === true) run.re_equip_required = true;
       break;
     }
-    /* v8 ignore next 2 -- unreachable: validateEventLog admits only kernel event types before applyEvent runs */
+    /* v8 ignore next 2 -- all admitted kernel variants are handled above; vocabulary drift must fail */
     default:
       throw new Error(`invalid event: unknown event type ${e.type}`);
   }
   d.seq = e.seq;
   // Version sync + project time — replay path only (see function doc).
   if (d.project !== null) {
-    if (STATE_MATERIAL_EVENTS.has(e.type)) {
+    if (isStateMaterialEvent(e.type)) {
       d.project.current_state_version = e.state_version;
     }
     d.project.updated_at = e.at;
@@ -1143,11 +1088,7 @@ export interface CloseEffectCommand {
   readonly expected_version: number;
 }
 
-/**
- * Intent-first ledger admission. The intent key is the caller-supplied
- * identity of the business action; re-recording the same key returns the
- * already-recorded row and appends zero events.
- */
+/** Caller-owned intent identity. Reuse is permitted while the recorded intent remains unknown. */
 export interface RecordEffectIntentCommand {
   readonly actor: string;
   readonly at: string;
@@ -1157,11 +1098,7 @@ export interface RecordEffectIntentCommand {
   readonly expected_version: number;
 }
 
-/**
- * Late cancel: the side effect already ran but a cancel signal arrived
- * afterwards. The ledger marks the row as late_cancel_received — the row
- * cannot be closed as confirmed/failed afterwards.
- */
+/** Records cancellation for a pending or executing effect without claiming it completed. */
 export interface CancelEffectLateCommand {
   readonly actor: string;
   readonly at: string;
@@ -1223,6 +1160,11 @@ export interface ConfirmDeliveryCommand {
 // The kernel
 // ---------------------------------------------------------------------------
 
+/**
+ * Authority for one project: commands enforce policy and append facts;
+ * replay alone updates the projection. Business denials return registry
+ * errors, while invalid persisted data raises an integrity error.
+ */
 export class ProjectStateKernel {
   readonly #history = new EventHistory();
   readonly #draft: MutableProjection = emptyProjection();
@@ -1230,6 +1172,11 @@ export class ProjectStateKernel {
   // registered actor; rebuilt identically by replay from authorship
   #causalClock: CausalClockSnapshot = {};
   #projectionView: KernelProjection | undefined;
+  readonly #validateObservation: ObservationValidator | undefined;
+
+  constructor(validateObservation?: ObservationValidator) {
+    this.#validateObservation = validateObservation;
+  }
 
   /** Read-only view of the live replay-built projection. */
   get projection(): KernelProjection {
@@ -1255,22 +1202,17 @@ export class ProjectStateKernel {
     return this.#history.all();
   }
 
-  /**
-   * Read surface (minimal, R0): the only way to read assets from the
-   * kernel. Both paths route through the same scope predicate used by
-   * equip derivation — a caller must not be able to distinguish
-   * "out of scope" from "absent".
-   */
+  /** Project-scoped asset reads use the same visibility predicate as Equip derivation. */
   listAssets(): readonly AssetRow[] {
-    return Object.values(this.#draft.assets).filter(
-      (a) => alive(a) && scopeVisibleForProject(a.scope),
+    return immutableCopy(
+      Object.values(this.#draft.assets).filter((a) => alive(a) && scopeVisibleForProject(a.scope)),
     );
   }
 
   getAssetById(id: string): AssetRow | undefined {
     const a = this.#draft.assets[id];
     if (a === undefined || !alive(a) || !scopeVisibleForProject(a.scope)) return undefined;
-    return a;
+    return immutableCopy(a);
   }
 
   /**
@@ -1281,12 +1223,16 @@ export class ProjectStateKernel {
    * underlying intent.
    */
   listPendingEffects(): readonly EffectRow[] {
-    return Object.values(this.#draft.effects).filter((e) => alive(e) && e.status === 'unknown');
+    return immutableCopy(
+      Object.values(this.#draft.effects).filter((e) => alive(e) && e.status === 'unknown'),
+    );
   }
 
   /** Effects begun but not yet closed — the crash-recovery window. */
   listExecutingEffects(): readonly EffectRow[] {
-    return Object.values(this.#draft.effects).filter((e) => alive(e) && e.status === 'executing');
+    return immutableCopy(
+      Object.values(this.#draft.effects).filter((e) => alive(e) && e.status === 'executing'),
+    );
   }
 
   /** Tamper probe: history integrity AND live-vs-rebuilt canonical identity. */
@@ -1298,20 +1244,10 @@ export class ProjectStateKernel {
     return { ok: true };
   }
 
-  /**
-   * Full replay into a fresh projection (canonical-JSON equal to the live
-   * one). With an optional caller-supplied snapshot (the restore seam of
-   * the snapshot capability): when a snapshot is supplied and usable —
-   * envelope schema version equality, sequence cursor present in the log,
-   * state-version cursor matching the log event's recorded version — the
-   * projection is seeded from it and only the events after its sequence
-   * cursor are folded, canonically identical to a full fold. Unusable
-   * snapshots throw naming the problem: no silent fallback, no silent
-   * discard.
-   */
+  /** Rebuilds from history or a structurally valid cursor-bound snapshot and its tail. Full replay remains the audit of snapshot contents. */
   rebuildProjection(snapshot?: ProjectionSnapshot): KernelProjection {
     const events = this.#history.all();
-    validateEventLog(events);
+    validateEventLog(events, this.#validateObservation);
     if (snapshot === undefined) {
       const d = emptyProjection();
       for (const e of events) applyEvent(d, e);
@@ -1326,13 +1262,15 @@ export class ProjectStateKernel {
    *  tail; unusable snapshots throw naming the problem). The snapshot
    *  carries the projection, never the ledger: every event is appended to
    *  the history and every authorship advances the causal clock, while
-   *  only the events after the cursor are folded into the seeded state. */
+   *  only the events after the cursor are folded into the seeded state.
+   *  Non-kernel events require a validator, retained for later integrity checks. */
   static fromEvents(
     events: readonly StateEvent[],
     snapshot?: ProjectionSnapshot,
+    validateObservation?: ObservationValidator,
   ): ProjectStateKernel {
-    validateEventLog(events);
-    const k = new ProjectStateKernel();
+    validateEventLog(events, validateObservation);
+    const k = new ProjectStateKernel(validateObservation);
     if (snapshot !== undefined) Object.assign(k.#draft, restoreThenFold(events, snapshot));
     for (const event of events) {
       const frozen = k.#history.append(event);
@@ -1492,13 +1430,7 @@ export class ProjectStateKernel {
     return success(this.#draft.policy as PolicyRow);
   }
 
-  /**
-   * Project status transition — human-only, reason-carrying,
-   * non-destructive. Pause from active; resume from paused; complete from
-   * active (refused while a blocking hold is active); archive from any
-   * live status (cancels incomplete works and invalidates non-resolved
-   * holds, each closure event carrying the archive cause).
-   */
+  /** Human-gated lifecycle changes preserve history. Archiving cancels unfinished works and invalidates outstanding holds. */
   setProjectStatus(cmd: SetProjectStatusCommand): KernelResult<ProjectRow> {
     const humanGate = this.#requireHuman('set_project_status', cmd.actor);
     if (!humanGate.ok) return humanGate;
@@ -2099,11 +2031,7 @@ export class ProjectStateKernel {
     return success(this.#draft.effects[effectId] as EffectRow);
   }
 
-  /**
-   * Begin execution: unknown → executing. The nibble of facts for the
-   * lifecycle gets its first bump here: calling closeEffect later is
-   * legal only while in this state. Calling it twice is refused.
-   */
+  /** Records execution start before a terminal outcome can be admitted. */
   beginEffectExecution(cmd: BeginEffectExecutionCommand): KernelResult<EffectRow> {
     const gate = this.#guardPreconditions(
       cmd.expected_version,
@@ -2189,12 +2117,7 @@ export class ProjectStateKernel {
     return success(this.#draft.effects[cmd.effect_id] as EffectRow);
   }
 
-  /**
-   * Close an effect: executing → confirmed/failed. Closure is terminal:
-   * the row returns to no caller once closed. Closures directly from
-   * unknown are refused (that would silently claim a side effect that
-   * never began). Late-cancelled rows may only settle as failed.
-   */
+  /** Records the terminal outcome of an executing effect. Late cancellation permits failed closure only. */
   closeEffect(cmd: CloseEffectCommand): KernelResult<EffectRow> {
     const gate = this.#guardPreconditions(
       cmd.expected_version,
@@ -2243,7 +2166,6 @@ export class ProjectStateKernel {
         error: kernelErrors.forbidden('close_effect', { reason: 'effect-cancelled' }),
       };
     }
-    // (close with outcome 'failed' proceeds)
     this.#append('effect.closed', cmd.at, cmd.actor, {
       effect_id: cmd.effect_id,
       outcome: cmd.outcome,
@@ -2253,11 +2175,7 @@ export class ProjectStateKernel {
     return success(this.#draft.effects[cmd.effect_id] as EffectRow);
   }
 
-  /**
-   * Intent-first ledger admission. Replays of the same intent key return
-   * the already-recorded row without appending an event, so duplicates
-   * collapse to a single ledger row. The row's status starts as unknown.
-   */
+  /** Creates an unknown intent or reuses one still in that state. Other existing states are refused. */
   recordEffectIntent(cmd: RecordEffectIntentCommand): KernelResult<EffectRow> {
     const gate = this.#guardPreconditions(
       cmd.expected_version,
@@ -2301,12 +2219,7 @@ export class ProjectStateKernel {
     return success(this.#draft.effects[effectId] as EffectRow);
   }
 
-  /**
-   * Late cancel folds the row to unknown and stamps late_cancel_received.
-   * The row is then permanently rejectable by closeEffect — a late-cancel
-   * can never be promoted to confirmed/failed, so no downstream gate
-   * (delivery, acceptance) can silently treat it as completed work.
-   */
+  /** Records cancellation without undoing an effect; confirmation is then refused. */
   cancelEffectLate(cmd: CancelEffectLateCommand): KernelResult<EffectRow> {
     const gate = this.#guardPreconditions(
       cmd.expected_version,
@@ -2329,8 +2242,7 @@ export class ProjectStateKernel {
         error: kernelErrors.forbidden('cancel_effect_late', { reason: 'effect-not-found' }),
       };
     }
-    // Late cancel also applies mid-execution (the runner has the stamp
-    // trigger from mesh/cancel); only terminal rows are refused.
+    // Cancellation may arrive during execution; terminal effects cannot change.
     if (ef.status === 'confirmed' || ef.status === 'failed') {
       return {
         ok: false,
@@ -3358,7 +3270,7 @@ export class ProjectStateKernel {
       data,
       actor,
       at,
-      state_version: STATE_MATERIAL_EVENTS.has(type) ? this.stateVersion + 1 : this.stateVersion,
+      state_version: isStateMaterialEvent(type) ? this.stateVersion + 1 : this.stateVersion,
       schema_version: STATE_EVENT_SCHEMA_VERSION,
     });
     applyEvent(this.#draft, frozen);

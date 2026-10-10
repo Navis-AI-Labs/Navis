@@ -9,7 +9,7 @@ A crashed process cannot tell which effects still need to run. The projection in
 Options evaluated:
 
 1. **A separate `EffectLedgerPendingStore` port in `packages/domain/ports/` with its own PG adapter.** Rejected — it would be a _second_ source of truth for an application-level answer the kernel already owns. Domain holds the predicate; persistence just feeds the kernel its events back.
-2. **`listPendingEffects()` on the kernel + a replay round-trip test.** Chosen — one line of logic, Zero new tables, zero new ports. The EventStore is already transactionally safe (DEC-0011-favored shape); the question is only the predicate that callers need.
+2. **`listPendingEffects()` on the kernel + a replay round-trip test.** Chosen — one line of logic, Zero new tables, zero new ports. The EventStore is already transactionally safe; the question is only the predicate that callers need.
 
 ## Invariants
 

@@ -4,25 +4,7 @@ import type { ProjectDirectory } from '@navis/domain';
 import { AuthorizationDeniedError, UnauthorizedError } from '../platform/errors.js';
 import type { ServiceRoute } from '../platform/server.js';
 
-/**
- * Authorization middleware (spec: authentication establishes device
- * identity; authorization is membership — deny is the default).
- *
- * Composes any protected route:
- *
- * 1. `Authentication` — the `Authorization: Bearer <key_id>.<secret>`
- *    header is verified against the device-key store; a failed or revoked
- *    key never reaches the route (401 with the stable denial token).
- * 2. `Authorization` — for a project-scoped route (`:projectId` in the path
- *    or event `project_id`s in the body), every project must appear in the
- *    participant's membership row; a non-member is denied with the
- *    authorization token, and the use case never runs (403).
- *
- * The participant is therefore resolved from the authenticated key alone;
- * a request can never claim someone else's identity (δ4). The wrapped route
- * receives the identity through its handler's fourth argument so the
- * contract body stays unchanged for zod `strictObject` parsing.
- */
+/** Authentication resolves identity; resource membership is checked before the route runs. */
 
 /** The verified identity a wrapped route sees alongside its input. */
 export interface DeviceIdentity {
@@ -64,13 +46,7 @@ function denied(result: AuthenticateResult): never {
   throw new UnauthorizedError('device-auth/key-invalid');
 }
 
-/**
- * Wraps a route with device-key authentication and membership authorization.
- * The inner route runs only when the bearer key resolves to a live device
- * whose participant is a member of every project the request touches; the
- * identity stays in the composition — routes keep taking their caller from
- * `deps.participantId`, now always an authenticated one.
- */
+/** Binds verified identity through the composition callback after membership checks. */
 export function withDeviceAuth(
   deps: AuthMiddlewareDeps,
   route: ServiceRoute,

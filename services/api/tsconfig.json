@@ -11,6 +11,15 @@
   "references": [
     {
       "path": "../../packages/contracts"
+    },
+    {
+      "path": "../../packages/domain"
+    },
+    {
+      "path": "../../packages/application"
+    },
+    {
+      "path": "../../packages/infrastructure"
     }
   ],
   "include": ["src/**/*.ts"],

@@ -27,7 +27,7 @@ At the same time, this codebase's law (AGENTS.md, openspec/project.md) requires 
 ## Alternatives
 
 - **Adopt the Supabase SDK in the domain:** rejected — vendor lock-in of the trust engine; violates ADR-0001 (domain imports nothing).
-- **ORM (Prisma/Drizzle) over the port:** rejected — a second schema language and codegen cycle for a storage need that plain SQL serves; the T-series simulations validated raw event rows, not ORM models.
+- **ORM (Prisma/Drizzle) over the port:** rejected — a second schema language and codegen cycle for a storage need that plain SQL serves.
 - **EventStoreDB / specialized event stores:** rejected — operationally heavier than PostgreSQL for R0, and the ledger semantics (append-only, replayable) are simple enough for SQL.
 - **In-memory only for R0:** rejected — persistence is a first-class requirement of the kernel change (the persistence-ports capability admits the Postgres-wire adapter as core R0 scope, not a later add-on); deferring it would make the ledger a toy.
 

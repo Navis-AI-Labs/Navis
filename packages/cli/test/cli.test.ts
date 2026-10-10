@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { run, type CliDeps, type CliInvocation } from '../src/index.js';
+import { parse, run, type CliDeps, type CliInvocation } from '../src/index.js';
 
 /**
  * CLI routing is stateless — no module-level cache, every invocation re-reads
@@ -221,5 +221,41 @@ describe('navis cli · stateless command routing', () => {
     expect(deps.ipcCalls.length).toBe(2);
     expect(deps.ipcCalls[0]?.['op']).toBe('status');
     expect(deps.ipcCalls[1]?.['op']).toBe('status');
+  });
+});
+
+describe('command argument parsing', () => {
+  it('keeps positional arguments separate from a single-word command', () => {
+    expect(parse(['init', 'folder'])).toEqual({ verb: 'init', args: ['folder'], flags: new Map() });
+  });
+  it('parses bridge subcommands and both flag value forms', () => {
+    const result = parse(['bridge', 'link', '--toml', 'navis.toml', '--label=a=b', '--verbose']);
+    expect(result.verb).toBe('bridge link');
+    expect(result.flags).toEqual(
+      new Map<string, string | true>([
+        ['toml', 'navis.toml'],
+        ['label', 'a=b'],
+        ['verbose', true],
+      ]),
+    );
+  });
+  it('keeps adjacent boolean flags independent and permits an empty invocation', () => {
+    expect(parse(['status', '--json', '--quiet']).flags).toEqual(
+      new Map([
+        ['json', true],
+        ['quiet', true],
+      ]),
+    );
+    expect(parse([]).verb).toBe('');
+  });
+  it('forwards the declared project for a parsed hook command', async () => {
+    const deps = makeDeps({
+      ipc: { send: () => Promise.resolve({ status: 'unbound', reason: 'no_toml' }) },
+    });
+    await run(
+      parse(['bridge', 'hook', '--toml-project-id', '01924a61-7a1b-7c2d-8e3f-000000000001']),
+      deps,
+    );
+    expect(deps.ipcCalls[0]?.['toml_project_id']).toBe('01924a61-7a1b-7c2d-8e3f-000000000001');
   });
 });

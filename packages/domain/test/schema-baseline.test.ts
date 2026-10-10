@@ -30,7 +30,7 @@ import { uuidv7 } from '../src/schema/ids.js';
 
 /**
  * Baseline guard: field sets and enum sets must equal the accepted
- * research baseline. This test FAILS on any local invention — renamed
+ * field baseline declared below. This test FAILS on any local invention — renamed
  * field, extra field, missing enum value, extra enum value.
  */
 

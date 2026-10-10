@@ -170,18 +170,22 @@ export async function registerDevice(
   return { key_id: keyId, device_id: device.id, key_secret: secret, issued_at: createdAt };
 }
 
+/** Returns false for missing or foreign-owned targets without mutating their device or keys. */
 export async function revokeDevice(
   deps: DeviceAuthDeps,
   deviceId: string,
   reason: string | null,
   actorId: string,
-): Promise<void> {
+): Promise<boolean> {
+  const device = await deps.store.getDevice(deviceId);
+  if (device?.participant_id !== actorId) return false;
   await deps.store.revokeDevice({
     deviceId,
     reason,
     revokedAt: deps.now(),
     updatedBy: actorId,
   });
+  return true;
 }
 
 export function listDevices(deps: DeviceAuthDeps, participantId: string): Promise<DeviceRecord[]> {

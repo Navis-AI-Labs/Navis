@@ -1,22 +1,18 @@
+import { createApiRuntime } from './composition.js';
 import { loadApiConfig } from './config.js';
-import { createApiServer } from './server.js';
 
-/**
- * Process entry: validate configuration once, wire signal-driven shutdown, and
- * listen. Nothing here is importable — this module exists to run.
- */
-
-const config = loadApiConfig();
-const server = createApiServer(config, {
-  write(line) {
-    process.stdout.write(line);
-    process.stdout.write('\n');
+const runtime = await createApiRuntime(loadApiConfig(), {
+  write: (line) => {
+    process.stdout.write(`${line}\n`);
   },
 });
-await server.listen(config.port, config.host);
+await runtime.listen();
 
 const stop = (): void => {
-  void server.close();
+  void runtime.close().catch(() => {
+    process.stderr.write('API shutdown failed.\n');
+    process.exitCode = 1;
+  });
 };
 process.on('SIGTERM', stop);
 process.on('SIGINT', stop);

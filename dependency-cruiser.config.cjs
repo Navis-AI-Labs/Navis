@@ -40,10 +40,19 @@ module.exports = {
     {
       name: 'services-api-imports-only-public',
       severity: 'error',
-      from: { path: '^services/api/src' },
+      from: { path: '^services/api/src', pathNot: '^services/api/src/platform/composition\\.ts$' },
       to: {
         path: '^packages/',
         pathNot: '^packages/(contracts|application|domain)/',
+      },
+    },
+    {
+      name: 'api-composition-imports-only-admitted-packages',
+      severity: 'error',
+      from: { path: '^services/api/src/platform/composition\\.ts$' },
+      to: {
+        path: '^packages/',
+        pathNot: '^packages/(contracts|application|domain|infrastructure)/',
       },
     },
     {

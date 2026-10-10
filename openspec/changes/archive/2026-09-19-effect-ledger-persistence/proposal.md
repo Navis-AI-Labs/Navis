@@ -18,7 +18,7 @@ Without this listed predicate, "the project rebooted" is indistinguishable from 
 
 ## Non-Goals
 
-- Executor-side idempotency of the effect payload itself (that is baton at R0-48 in the roadmap's numbering).
+- Executor-side idempotency of the effect payload itself.
 - Recovery scheduling / worker trigger: this change exposes the signal; it does not run the poller.
 - Command-intake integration: the command inbox / dispatchCommand flow already exists and is unaffected.
 

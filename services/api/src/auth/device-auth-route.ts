@@ -17,27 +17,15 @@ import {
   type DeviceAuthDeps,
 } from '@navis/application';
 
-import { BadRequestError, UnsupportedContractVersionError } from '../platform/errors.js';
+import {
+  AuthorizationDeniedError,
+  BadRequestError,
+  UnauthorizedError,
+  UnsupportedContractVersionError,
+} from '../platform/errors.js';
 import type { ServiceRoute } from '../platform/server.js';
 
-/**
- * Device-auth routes (spec: authentication establishes device identity).
- *
- * RFC 8628 lives at these four endpoints plus the device registry:
- *
- * - `POST /api/device/codes` — starts the flow; unauthenticated by design
- *   (the device has no credential yet), rate limiting is a transport concern.
- * - `POST /api/device/token` — the daemon polls; pending/denied/expired map
- *   to the RFC error tokens inside a 200 envelope per this surface's shape.
- * - `POST /api/devices` — the one-shot session token authorizes registration
- *   exactly once; the API key secret appears in this response and never again.
- * - `DELETE /api/devices/:deviceId` — member-side revocation; the caller is
- *   the device's own participant, resolved from the key, never from the URL.
- *
- * `GET /api/devices` lists the caller's devices and never returns secrets.
- * Until task 5.2 installs the membership middleware, member-side endpoints
- * take the participant from the authenticated device key on the request.
- */
+/** Device-code requests are public; registration and device operations validate their credentials. */
 
 export interface DeviceAuthRouteDeps {
   readonly deviceFlow: DeviceAuthDeps;
@@ -129,15 +117,19 @@ export function registerDeviceRoute(deps: DeviceAuthRouteDeps): ServiceRoute {
   };
 }
 
-/** Authorizes a member-side request by its device key; null means deny. */
+/** Device management requires a live key before target ownership can be evaluated. */
 async function authenticatedParticipant(
   deps: DeviceAuthRouteDeps,
   headers: Record<string, string | string[] | undefined> | undefined,
-): Promise<{ participantId: string } | null> {
+): Promise<{ participantId: string }> {
   const header = authorizationHeader(headers);
-  if (header === undefined) return null;
+  if (header === undefined) throw new UnauthorizedError('device-auth/key-invalid');
   const auth = await authenticateKey(deps.deviceFlow, header);
-  if (auth.outcome !== 'authenticated') return null;
+  if (auth.outcome !== 'authenticated') {
+    throw new UnauthorizedError(
+      auth.outcome === 'device_revoked' ? 'device-auth/device-revoked' : 'device-auth/key-invalid',
+    );
+  }
   return { participantId: auth.participant_id };
 }
 
@@ -157,13 +149,13 @@ export function revokeDeviceRoute(deps: DeviceAuthRouteDeps): ServiceRoute {
         parseDeviceAuth({ device_id: params['deviceId'], reason: params['reason'] }),
       );
       const caller = await authenticatedParticipant(deps, headers);
-      if (caller === null) return { device_id: request.device_id, revoked: false };
-      await revokeDevice(
+      const revoked = await revokeDevice(
         deps.deviceFlow,
         request.device_id,
         request.reason ?? null,
         caller.participantId,
       );
+      if (!revoked) throw new AuthorizationDeniedError();
       return { device_id: request.device_id, revoked: true };
     },
   };
@@ -180,7 +172,6 @@ export function listDevicesRoute(deps: DeviceAuthRouteDeps): ServiceRoute {
       headers?: Record<string, string | string[] | undefined>,
     ) => {
       const caller = await authenticatedParticipant(deps, headers);
-      if (caller === null) return { devices: [] };
       const devices = await listDevices(deps.deviceFlow, caller.participantId);
       return {
         devices: devices.map((d) => ({

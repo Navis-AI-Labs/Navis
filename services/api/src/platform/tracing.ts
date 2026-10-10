@@ -4,15 +4,7 @@ import { z } from 'zod';
 
 import { requestContextSchema, requestIdSchema } from '@navis/contracts';
 
-/**
- * W3C Trace Context extraction — the service-side end of the correlation chain.
- *
- * The bridge daemon carries a `traceparent` (and optionally `tracestate`) on
- * every request; the local Agent session, the daemon, and server-side handling
- * share one trace. Malformed input is discarded, never echoed back or repaired:
- * an unusable `traceparent` is ignored and the caller mints a fresh context,
- * which is what the W3C rule prescribes for invalid context.
- */
+/** Parses optional W3C Trace Context headers. Invalid context is discarded; the request boundary supplies fresh context when needed. */
 
 export type RequestContext = z.infer<typeof requestContextSchema>;
 
@@ -90,7 +82,7 @@ export function freshRequestContext(): RequestContext {
 /**
  * The W3C trace-id carried inside a traceparent, or `undefined` when the parent
  * is absent or does not hold one. Correlation fields on responses and log lines
- * use the trace-id, not the full traceparent (standard 03).
+ * use the trace-id, not the full traceparent.
  */
 export function traceIdFromParent(traceParent: string | undefined): string | undefined {
   if (traceParent === undefined) {

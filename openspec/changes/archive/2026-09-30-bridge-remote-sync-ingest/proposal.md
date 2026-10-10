@@ -4,13 +4,13 @@
 
 Navis has a verified domain kernel (append-only ledger, replay-verified projection, idempotent command intake, Canonical Work Event envelope — 740 tests, 100% line coverage) but **no running system**: zero HTTP endpoints, no service process, no local daemon. The kernel is a body without limbs. Agents cannot yet leave a session and have their work enter a Project.
 
-The design space behind this change was closed by the research record: the binding table and Outbox state machine, the privacy classes and session-internal event minimum set, five cross-platform differences, the first-run flow and device-flow auth, state-version-driven context loading, and experiment evidence for crash recovery, concurrency, real network faults, and the seq-gap fix. Those decisions are in force and are not re-litigated here; this change implements them.
+The design in this change covers the binding table and Outbox state machine, the privacy classes and session-internal event minimum set, five cross-platform differences, the first-run flow and device-flow auth, state-version-driven context loading, and experiment evidence for crash recovery, concurrency, real network faults, and the seq-gap fix. Those decisions are in force and are not re-litigated here; this change implements them.
 
 This change turns that design into the first runnable two-sided Navis: a service that receives and queries session events, and a local daemon that binds a repository, buffers offline, and uploads reliably — with authentication, cross-platform parity, and privacy defaults baked in.
 
 ## Authorization and scope
 
-This change is authorized by the owner. The server-side ingest endpoint, query endpoint, device management, daemon, and CLI land in **this repository alongside the domain kernel**, in one change, with **no backward compatibility** (nothing is live). The research record behind each design decision is summarized inline in `design.md` so a reviewer never needs a second checkout.
+This change is authorized by the owner. The server-side ingest endpoint, query endpoint, device management, daemon, and CLI land in **this repository alongside the domain kernel**, in one change, with **no backward compatibility** (nothing is live). Design decisions and alternatives are recorded in `design.md`.
 
 ## What changes
 
@@ -47,7 +47,7 @@ This change is authorized by the owner. The server-side ingest endpoint, query e
 - **No nested toml / monorepo multi-project** — one toml per repository root; inner tomls are ignored. `parent_binding_id` is a reserved placeholder, always null.
 - **No fine-grained permissions** — membership is binary (member/non-member); the `role` field on participants already exists but is not enforced. Device keys reserve a scope slot (empty now).
 - **No GitHub-authorization bridging** — GitHub may serve as a login identity provider, but authorization is decided by Navis's own participant table (the kernel's "humans enact" rule cannot be expressed by repository permissions).
-- **No real-time channel for mid-session invalidation in this change** — mid-session state invalidation degrades to the Return-time version check (blueprint §11.2); SSE/WebSocket selection is deferred to the runtime ADR's follow-up.
+- **No real-time channel for mid-session invalidation in this change** — mid-session state invalidation degrades to the Return-time version check; SSE/WebSocket selection is deferred to the runtime ADR's follow-up.
 - **No new domain behavior** — the kernel is untouched; this change wires existing accepted behavior to transports.
 - **No minimal UI** — no user workflow requires one yet; the first service serves machine clients.
 
@@ -63,10 +63,10 @@ This change is authorized by the owner. The server-side ingest endpoint, query e
 ## Material decisions requiring an ADR
 
 - **API runtime selection** (HTTP framework, JSON profile wiring, real-time channel option) — ADR-0004 forbids selecting before the first accepted use case; this change is that use case. Evaluated against ADR-0004's six evidence points in `design.md` δ1.
-- **Daemon persistence** — SQLite WAL (`synchronous=NORMAL`, one transaction per event) is already decided in the research record and evidenced by crash and concurrency experiments; recorded as an ADR for this repository.
+- **Daemon persistence** — SQLite WAL (`synchronous=NORMAL`, one transaction per event) is evaluated against crash and concurrency requirements in this change; recorded as an ADR for this repository.
 
 ## Review evidence
 
-- Research record: the completed research repository that closed this design space (binding, Outbox, auth, loading, cross-platform, experiment evidence).
+- Design rationale and alternatives are recorded in this change's `design.md`.
 - Main-repo baseline: clean tree, `pnpm validate` seven gates green, 740 passed / 43 skipped, OpenSpec strict 14/14, no active change before this one.
 - Every requirement below maps to at least one scenario with a verification command in `tasks.md`.

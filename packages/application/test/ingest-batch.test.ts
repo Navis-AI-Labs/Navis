@@ -2,7 +2,14 @@ import { createHash } from 'node:crypto';
 
 import { describe, expect, it } from 'vitest';
 
-import { canonicalJson } from '@navis/domain';
+import {
+  canonicalJson,
+  eventEnvelopeSchema,
+  ProjectStateKernel,
+  serializeProjectionStateRecord,
+  type StateEvent,
+} from '@navis/domain';
+import { parseCanonicalWorkEventPayload } from '@navis/contracts';
 import { InMemoryEventStore } from '@navis/infrastructure';
 
 import { ingestBatch, type IngestEventInput } from '../src/index.js';
@@ -294,4 +301,72 @@ describe('ingestBatch', () => {
       [1, 'rejected'],
     ]);
   });
+});
+
+it('records observations at the current ledger version when a snapshot is older', async () => {
+  const k = new ProjectStateKernel();
+  const actor = nextId();
+  k.registerParticipant({ participant_id: actor, type: 'human', at: AT });
+  const project = k.createProject({ actor, at: AT, title: 'version fixture', expected_version: 0 });
+  if (!project.ok) throw new Error('fixture failed');
+  const projectId = project.value.id;
+  const store = new InMemoryEventStore();
+  const envelope = (e: StateEvent) =>
+    eventEnvelopeSchema.parse({
+      event_id: nextId(),
+      project_id: projectId,
+      seq: e.seq,
+      aggregate_type: 'project',
+      aggregate_id: projectId,
+      aggregate_revision: e.seq,
+      event_type: e.type,
+      event_schema_version: e.schema_version,
+      occurred_at: e.at,
+      recorded_at: e.at,
+      actor_participant_id: e.actor,
+      payload: e.data,
+      metadata: {},
+      privacy_class: 'audit',
+      state_version: e.state_version,
+    });
+  await store.append(projectId, k.events.map(envelope), 0);
+  await store.saveSnapshot(projectId, {
+    seq: k.currentSeq,
+    state_version: 0,
+    schema_version: 1,
+    state: serializeProjectionStateRecord(k.projection),
+  });
+  const before = k.currentSeq;
+  k.updateBoundary({
+    actor,
+    at: AT,
+    reason: 'new requirement',
+    boundary: 'new scope',
+    expected_version: 0,
+  });
+  await store.append(projectId, k.events.filter((e) => e.seq > before).map(envelope), before);
+  await ingestBatch(
+    { eventStore: store, verifyPayloadHash: false, now: () => AT },
+    {
+      deviceId: DEVICE,
+      events: [input({ project_id: projectId })],
+    },
+  );
+  const stored = await store.loadEvents(projectId, 0);
+  expect(stored.at(-1)?.state_version).toBe(1);
+  const replayed = ProjectStateKernel.fromEvents(
+    stored.map((e) => ({
+      seq: e.seq,
+      type: e.event_type,
+      data: e.payload,
+      actor: e.actor_participant_id,
+      at: e.occurred_at,
+      state_version: e.state_version,
+      schema_version: e.event_schema_version,
+    })),
+    undefined,
+    parseCanonicalWorkEventPayload,
+  );
+  expect(replayed.stateVersion).toBe(1);
+  expect(replayed.verifyIntegrity()).toEqual({ ok: true });
 });

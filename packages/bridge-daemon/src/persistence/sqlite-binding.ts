@@ -6,16 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import type { BindingRecord, BindingTablePort } from '../binding/ports.js';
 
-/**
- * The daemon's only database: node:sqlite in WAL mode (ADR-0012).
- *
- * One file, one writer, zero runtime dependency. The migration runner
- * mirrors the server's convention: versioned `.sql` files tracked in a
- * `schema_migrations` table with a sha256 checksum each. Tampering with an
- * already-applied migration is itself an integrity violation and refuses the
- * database until the operator resets state (the binding table's tamper story
- * lives at the toml layer, not the schema layer).
- */
+/** Versioned SQL migrations retain checksums so edited, already-applied migrations are rejected. */
 
 interface Migration {
   readonly version: number;
@@ -50,7 +41,7 @@ export function openDaemonDb(filePath: string): DatabaseSync {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const db = new DatabaseSync(filePath);
   // WAL >= readers-cohere while writer appends; NORMAL durability suits a
-  // machine-local buffer whose authoritative copy is the server (ADR-0012).
+  // machine-local buffer whose authoritative copy is the server.
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA synchronous = NORMAL');
   // bookkeeping before migration: the checksum row can only land after the table exists

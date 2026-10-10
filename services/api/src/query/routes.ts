@@ -9,22 +9,7 @@ import type { EventStore, ProjectDirectory } from '@navis/domain';
 import { UnsupportedContractVersionError } from '../platform/errors.js';
 import type { ServiceRoute } from '../platform/server.js';
 
-/**
- * The query surface — three GET endpoints (spec requirement: query endpoints
- * return three time-planes without truncation).
- *
- * Each route owns transport only: parse against the public contract, hand to
- * the use case, shape the response. Authorization is membership (δ4): the
- * caller's participant is resolved from the device key by the auth
- * middleware, never from the query string. `search_projects` and
- * `load_context` filter server-side; `get_project_state` denies a non-member
- * before the ledger is touched.
- *
- * The envelope (`{data, meta}`) is applied by the server core; these routes
- * return the body. Paginated responses carry their cursors in `meta.page`,
- * composed by `createCursorPageResponse` so the wire shape is identical
- * across every paginated endpoint.
- */
+/** Maps project queries to use cases; identity comes from the authenticated request scope. */
 
 export interface QueryRouteDeps {
   /** The ledger; a concrete adapter is injected by the composition root. */

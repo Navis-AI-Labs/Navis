@@ -1,4 +1,5 @@
 import type postgres from 'postgres';
+import { instantSchema } from '@navis/domain';
 
 import type {
   DeviceAuthPort,
@@ -9,20 +10,8 @@ import type {
   DeviceSessionRecord,
 } from '@navis/domain';
 
-/**
- * Postgres DeviceAuth adapter. The tables come from `001_events.sql`
- * (devices, device_keys, device_codes, device_sessions, project_members).
- * Two invariants stay in SQL, not application memory:
- *
- * - active-key uniqueness lives in `uq_device_keys_device_active`, so a
- *   second live key for one device can never exist;
- * - revocation cascades inside the database via the `AFTER UPDATE` trigger
- *   on `devices.revoked_at`, so a hot-path key read sees the stop flag
- *   without joining the device row.
- */
-/** Columns load as unknown; the schema fixed them as text, so enforce it. */
+/** Text fields must remain strings; date conversion belongs only to timestamp columns. */
 function asText(value: unknown): string {
-  /* v8 ignore next 1 -- the wire carries text columns only */
   if (typeof value !== 'string') throw new Error('expected a text column');
   return value;
 }
@@ -32,6 +21,18 @@ function asTextOrNull(value: unknown): string | null {
   return asText(value);
 }
 
+/** postgres.js returns timestamptz as Date; ports carry validated UTC instants. */
+function asInstant(value: unknown): string {
+  const parsed = instantSchema.safeParse(value instanceof Date ? value.toISOString() : value);
+  if (!parsed.success) throw new Error('expected a timestamp column');
+  return parsed.data;
+}
+
+function asInstantOrNull(value: unknown): string | null {
+  return value === null ? null : asInstant(value);
+}
+
+/** Active-key uniqueness and revocation cascades are enforced by the database. */
 export class PostgresDeviceAuth implements DeviceAuthPort {
   constructor(private readonly sql: postgres.Sql) {}
 
@@ -62,11 +63,11 @@ export class PostgresDeviceAuth implements DeviceAuthPort {
       participant_id: asTextOrNull(row['participant_id']),
       user_code: asText(row['user_code']),
       verification_uri: asText(row['verification_uri']),
-      expires_at: asText(row['expires_at']),
+      expires_at: asInstant(row['expires_at']),
       interval_seconds: Number(row['interval_seconds']),
       status: row['status'] as DeviceCodeStatus,
-      created_at: asText(row['created_at']),
-      consumed_at: asTextOrNull(row['consumed_at']),
+      created_at: asInstant(row['created_at']),
+      consumed_at: asInstantOrNull(row['consumed_at']),
     };
   }
 
@@ -118,9 +119,9 @@ export class PostgresDeviceAuth implements DeviceAuthPort {
       participant_id: asText(row['participant_id']),
       access_token: asText(row['access_token']),
       refresh_token: asTextOrNull(row['refresh_token']),
-      expires_at: asText(row['expires_at']),
-      consumed_at: asTextOrNull(row['consumed_at']),
-      created_at: asText(row['created_at']),
+      expires_at: asInstant(row['expires_at']),
+      consumed_at: asInstantOrNull(row['consumed_at']),
+      created_at: asInstant(row['created_at']),
     };
   }
 
@@ -205,8 +206,8 @@ export class PostgresDeviceAuth implements DeviceAuthPort {
       device_id: asText(row['device_id']),
       verifier: asText(row['verifier']),
       algorithm: 'sha256',
-      revoked_at: row['revoked_at'] === null ? null : asText(row['revoked_at']),
-      issued_at: asText(row['issued_at']),
+      revoked_at: row['revoked_at'] === null ? null : asInstant(row['revoked_at']),
+      issued_at: asInstant(row['issued_at']),
     };
   }
 
@@ -223,10 +224,10 @@ export class PostgresDeviceAuth implements DeviceAuthPort {
       id: asText(row['id']),
       participant_id: asText(row['participant_id']),
       name: asText(row['name']),
-      revoked_at: row['revoked_at'] === null ? null : asText(row['revoked_at']),
+      revoked_at: row['revoked_at'] === null ? null : asInstant(row['revoked_at']),
       revoke_reason: row['revoke_reason'] === null ? null : asText(row['revoke_reason']),
-      last_seen_at: row['last_seen_at'] === null ? null : asText(row['last_seen_at']),
-      created_at: asText(row['created_at']),
+      last_seen_at: row['last_seen_at'] === null ? null : asInstant(row['last_seen_at']),
+      created_at: asInstant(row['created_at']),
     };
   }
 }

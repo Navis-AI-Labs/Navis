@@ -12,14 +12,7 @@ import {
 } from '@navis/infrastructure';
 
 import { loadApiConfig } from '../src/platform/config.js';
-import { withDeviceAuth } from '../src/auth/middleware.js';
-import { deviceAuthRoutes } from '../src/auth/device-auth-route.js';
-import { ingestRoute } from '../src/ingest/route.js';
-import {
-  getProjectStateRoute,
-  loadContextRoute,
-  searchProjectsRoute,
-} from '../src/query/routes.js';
+import { createApiRoutes } from '../src/platform/routes.js';
 import { createApiServer, type ApiServer } from '../src/platform/server.js';
 import type { LogSink } from '../src/platform/logging.js';
 
@@ -48,12 +41,13 @@ interface Fixture {
   readonly acquireKey: (participantId: string) => Promise<{ header: string; deviceId: string }>;
   readonly get: (path: string, authorization?: string) => Promise<Response>;
   readonly post: (path: string, body: unknown, authorization?: string) => Promise<Response>;
+  readonly del: (path: string, body: unknown, authorization?: string) => Promise<Response>;
   readonly logs: string[];
 }
 
 const started: ApiServer[] = [];
 
-/** The device-auth chain plus two protected routes, wrapped in the gate. */
+/** Exercise the same route composition the process entry installs. */
 function openRoutes(memberParticipantId: string | null): Fixture {
   const logs: string[] = [];
   const sink: LogSink = {
@@ -80,52 +74,13 @@ function openRoutes(memberParticipantId: string | null): Fixture {
     directory.grant(memberParticipantId, PROJECT_A);
   }
 
-  const deviceFlow = { store, now: () => NOW, verificationBaseUrl: 'http://127.0.0.1/device' };
-  // the wrapper verifies the key; the sink binds the verified identity into
-  // every wrapped route's participant dep, exactly like the composition root
-  let currentParticipant: string | null = null;
-  const identitySink = (identity: { participantId: string; deviceId: string }): void => {
-    currentParticipant = identity.participantId;
-  };
-  const queryDeps = {
+  const routes = createApiRoutes({
     eventStore,
+    deviceStore: store,
     projectDirectory: directory,
-    participantId: () => currentParticipant,
-  };
-  const routes = [
-    ...deviceAuthRoutes({ deviceFlow }),
-    withDeviceAuth({ deviceFlow, projectDirectory: directory }, getProjectStateRoute(queryDeps), {
-      identitySink,
-    }),
-    withDeviceAuth({ deviceFlow, projectDirectory: directory }, loadContextRoute(queryDeps), {
-      identitySink,
-    }),
-    withDeviceAuth({ deviceFlow, projectDirectory: directory }, searchProjectsRoute(queryDeps), {
-      identitySink,
-    }),
-    withDeviceAuth(
-      { deviceFlow, projectDirectory: directory },
-      ingestRoute({ eventStore, verifyPayloadHash: false, now: () => NOW }),
-      {
-        identitySink,
-        extractProjectIds: (input) => {
-          // every event envelope in the batch names its project; the gate is per event
-          const body = input as { events?: readonly unknown[] } | undefined;
-          if (body?.events === undefined) return [];
-          const ids: string[] = [];
-          for (const entry of body.events) {
-            if (typeof entry !== 'object' || entry === null) continue;
-            const event = (entry as { event?: unknown }).event;
-            if (typeof event === 'object' && event !== null) {
-              const projectId = (event as { project_id?: unknown }).project_id;
-              if (typeof projectId === 'string') ids.push(projectId);
-            }
-          }
-          return ids;
-        },
-      },
-    ),
-  ];
+    now: () => NOW,
+    verificationBaseUrl: 'http://127.0.0.1/device',
+  });
   const server = createApiServer(loadApiConfig({}), sink, routes);
   started.push(server);
   let portCache: number | undefined;
@@ -196,6 +151,7 @@ function openRoutes(memberParticipantId: string | null): Fixture {
     acquireKey,
     get: (path, authorization) => call('GET', path, undefined, authorization),
     post: (path, body, authorization) => call('POST', path, body, authorization),
+    del: (path, body, authorization) => call('DELETE', path, body, authorization),
     logs,
   };
 }
@@ -359,5 +315,78 @@ describe('membership gates ingest', () => {
     // no event appended: cross-scope isolation is the property, not the code
     const ledger = await fx.eventStore.loadEvents(PROJECT_A, 0);
     expect(ledger.length).toBe(0);
+  });
+  it('refuses an authenticated caller claiming another device identity', async () => {
+    const fx = openRoutes(PARTICIPANT_A);
+    const { header, body } = await ingestBatch(fx, PROJECT_A);
+    body['device_id'] = uuidv7();
+    expect((await fx.post('/api/ingest', body, header)).status).toBe(403);
+    expect(await fx.eventStore.headSeq(PROJECT_A)).toBe(0);
+  });
+
+  it('keeps concurrent callers isolated in the installed route composition', async () => {
+    const fx = openRoutes(PARTICIPANT_A);
+    const a = await fx.acquireKey(PARTICIPANT_A);
+    const b = await fx.acquireKey(PARTICIPANT_B);
+    const path = '/api/projects?query=merchant&limit=10';
+    const replies = await Promise.all(
+      Array.from({ length: 12 }, (_, index) => fx.get(path, index % 2 === 0 ? a.header : b.header)),
+    );
+    for (const [index, reply] of replies.entries()) {
+      expect(reply.status).toBe(200);
+      const results = dataOf(reply.body)['results'] as { project_id: string }[];
+      expect(results.map((row) => row.project_id)).toEqual(index % 2 === 0 ? [PROJECT_A] : []);
+    }
+  });
+
+  it.each([null, [], {}, { events: [null] }, { events: [{ event: { project_id: 12 } }] }])(
+    'reports malformed ingest input through the transport contract: %j',
+    async (input) => {
+      const fx = openRoutes(PARTICIPANT_A);
+      const { header } = await fx.acquireKey(PARTICIPANT_A);
+      expect((await fx.post('/api/ingest', input, header)).status).toBe(400);
+      expect(await fx.eventStore.headSeq(PROJECT_A)).toBe(0);
+    },
+  );
+});
+
+describe('device ownership through installed routes', () => {
+  it('denies foreign and missing devices, preserving the target and its key', async () => {
+    const fx = openRoutes(PARTICIPANT_A);
+    const caller = await fx.acquireKey(PARTICIPANT_A);
+    const target = await fx.acquireKey(PARTICIPANT_B);
+    const [keyId] = target.header.slice('Bearer '.length).split('.');
+    if (keyId === undefined) throw new Error('expected an issued key');
+    const before = await fx.store.getDevice(target.deviceId);
+    const keyBefore = await fx.store.getKeyById(keyId);
+    for (const deviceId of [target.deviceId, '01924a61-7a1b-7c2d-8e3f-000000009999']) {
+      const denied = await fx.del(`/api/devices/${deviceId}`, { reason: 'retired' }, caller.header);
+      expect(denied.status).toBe(403);
+      expect(denied.body).toMatchObject({
+        code: 'FORBIDDEN',
+        detail: 'device-auth/authorization-denied',
+      });
+    }
+    expect(await fx.store.getDevice(target.deviceId)).toEqual(before);
+    expect(await fx.store.getKeyById(keyId)).toEqual(keyBefore);
+    expect((await fx.get('/api/devices', target.header)).status).toBe(200);
+  });
+
+  it('allows repeat owner revocation from another live device', async () => {
+    const fx = openRoutes(PARTICIPANT_A);
+    const caller = await fx.acquireKey(PARTICIPANT_A);
+    const target = await fx.acquireKey(PARTICIPANT_A);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const revoked = await fx.del(
+        `/api/devices/${target.deviceId}`,
+        { reason: 'retired' },
+        caller.header,
+      );
+      expect(revoked.status).toBe(200);
+      expect(dataOf(revoked.body)['revoked']).toBe(true);
+    }
+    const denied = await fx.get('/api/devices', target.header);
+    expect(denied.status).toBe(401);
+    expect(denied.body).toMatchObject({ detail: 'device-auth/device-revoked' });
   });
 });
