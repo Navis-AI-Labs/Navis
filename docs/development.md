@@ -84,6 +84,16 @@ Source lint resolves public workspace entries directly from source through `tsco
 
 The supported profile runs the API on `http://127.0.0.1:8080` and runs PostgreSQL in its own Compose service with a named persistent volume. Source code and `node_modules` from the checkout are not mounted into the API container. Use the pinned Node/pnpm toolchain for repository commands.
 
+Get the source and install its frozen dependencies before following the configuration steps below:
+
+```bash
+git clone https://github.com/Navis-AI-Labs/Navis.git
+cd Navis
+pnpm install --frozen-lockfile
+```
+
+The CLI and skill are currently installed from source; standalone release packages are not published. Use a source revision that includes the local-instance runtime and installation scripts.
+
 ### Compose, containers and processes
 
 `docker-compose.yml` defines one project with two services, `api` and `postgres`. `pnpm instance up` invokes Compose to build and start them. Docker Desktop lists both containers under the Navis project. Each container has its own logs, health and restart policy.
@@ -209,6 +219,8 @@ pnpm instance install-skill --skill-dir (Join-Path $HOME '.claude/skills/navis')
 ```
 
 Choose only the tools you use; a custom skill root can be supplied explicitly. The installed copy records the pinned Node executable and client entry. Machine paths stay outside the source repository. Reinstall the skill after moving the checkout or runtime. Open a new Agent session to discover the newly installed skill, then ask it to use Navis in the consuming project. A client need not be on PATH when the installed skill supplies its command.
+
+For direct terminal use, add the installation's `.local/bin` directory to your user PATH. Keep the launchers together with their installed client; copying a launcher to another directory does not install the package. On Windows, use the generated `navis.cmd` entry. From a bound project directory, `navis status`, `navis hook` and `navis state` check the connection and current project.
 
 The operator configures separate human/agent credentials and the intended project membership as above. The Agent can then check `status`, `hook` and `state`, obtain Equip for existing Work, submit a Return and synchronize explicit capture. Missing Work or human approval remains a human action. Loading this skill does not automatically record every conversation; automatic tool-specific hook adapters are separate integration work.
 

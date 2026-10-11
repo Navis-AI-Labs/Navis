@@ -2,7 +2,7 @@
 
 ## Purpose
 
-TBD - created by archiving change local-instance-runtime. Update Purpose after archive.
+Define the headless local-instance workflow: attributable identities, authorized project commands, durable client synchronization, candidate-only model assistance, and recoverable deployment with portable client onboarding.
 
 ## Requirements
 

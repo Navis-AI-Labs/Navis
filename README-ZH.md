@@ -62,6 +62,10 @@ Agent 进入 Project 工作，完成后将成果与经验沉淀回 Project。Age
 
 欢迎 Issue、Discussion 或直接参与项目。
 
+## 开始使用
+
+使用 Node.js 24、pnpm 11 和 Docker Compose 从本仓库安装。按照[配置与 CLI 使用指南](docs/development.md#headless-local-instance)启动实例并连接项目；在 Codex 或 Claude Code 中，可安装可选的 [Navis skill](docs/development.md#agent-skill-and-cross-project-use)协助 Agent 使用。
+
 ---
 
 ## 许可证

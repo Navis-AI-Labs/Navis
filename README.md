@@ -57,6 +57,10 @@ Native client support targets Windows, macOS and Linux. Local submission accepts
 
 Contributions, Issues, and Discussions are welcome.
 
+## Getting Started
+
+Install from this repository with Node.js 24, pnpm 11 and Docker Compose. Follow the [setup and CLI guide](docs/development.md#headless-local-instance) to start an instance and connect a project. Coding Agents can use the optional [Navis skill](docs/development.md#agent-skill-and-cross-project-use) in Codex or Claude Code.
+
 ## License
 
 Free for non-commercial use.
