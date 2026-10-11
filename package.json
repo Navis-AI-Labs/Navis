@@ -16,9 +16,10 @@
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings 0",
     "openspec:validate": "openspec validate --all --strict",
-    "test": "vitest run --coverage",
+    "test": "vitest run --coverage --reporter=default --reporter=json --outputFile.json=coverage/test-results.json && node --test scripts/test/*.test.mjs",
     "typecheck": "pnpm -r --if-present typecheck",
-    "validate": "pnpm format:check && pnpm build && pnpm lint && pnpm typecheck && pnpm boundaries && pnpm test && pnpm openspec:validate"
+    "validate": "pnpm format:check && pnpm build && pnpm lint && pnpm typecheck && pnpm boundaries && pnpm test && pnpm openspec:validate",
+    "instance": "node scripts/local-instance.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

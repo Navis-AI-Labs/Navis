@@ -11,6 +11,9 @@
   "references": [
     {
       "path": "../domain"
+    },
+    {
+      "path": "../contracts"
     }
   ],
   "include": ["src/**/*.ts"],

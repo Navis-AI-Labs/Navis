@@ -46,7 +46,12 @@ import { uuidv7, uuidv7Schema } from '../schema/ids.js';
 import { MILLISECONDS_PER_DAY, instantSchema } from '../schema/time.js';
 import { intendedDirectionSchema } from '../schema/intended-direction.js';
 import { participantSchema, participantTypeSchema } from '../schema/participant.js';
-import { projectSchema, projectStatusSchema, stateVersionSchema } from '../schema/project.js';
+import {
+  projectSchema,
+  projectStatusSchema,
+  stateVersionSchema,
+  capturePrivacySchema,
+} from '../schema/project.js';
 import { textSchema } from '../schema/text.js';
 import { workSchema } from '../schema/work.js';
 import { acceptanceResultSchema } from '../schema/acceptance.js';
@@ -348,6 +353,7 @@ function applyEvent(d: MutableProjection, e: StateEvent): void {
         created_at: e.at,
       };
       d.policy = {
+        capture_privacy: 'metadata',
         event_count_window: CAPTURE_EVENT_COUNT_WINDOW_DEFAULT,
         time_window_days: CAPTURE_TIME_WINDOW_DAYS_DEFAULT,
         updated_at: e.at,
@@ -363,6 +369,8 @@ function applyEvent(d: MutableProjection, e: StateEvent): void {
       if (data['time_window_days'] !== undefined) {
         policy.time_window_days = data['time_window_days'] as number;
       }
+      if (data['capture_privacy'] !== undefined)
+        policy.capture_privacy = data['capture_privacy'] as 'metadata' | 'local-only';
       policy.updated_at = e.at;
       policy.updated_by = e.actor ?? null;
       break;
@@ -934,6 +942,7 @@ export interface CloseInterventionCommand {
 }
 
 export interface CreateProjectCommand {
+  readonly project_id?: string;
   readonly actor: string;
   readonly at: string;
   readonly title: string;
@@ -953,6 +962,7 @@ export interface UpdateBoundaryCommand {
 }
 
 export interface UpdatePolicyCommand {
+  readonly capture_privacy?: 'metadata' | 'local-only';
   readonly actor: string;
   readonly at: string;
   readonly reason: string;
@@ -1315,6 +1325,7 @@ export class ProjectStateKernel {
     const invalid = invalidFields('create_project', [
       ['actor', uuidv7Schema, cmd.actor],
       ['at', instantSchema, cmd.at],
+      ['project_id', uuidv7Schema.optional(), cmd.project_id],
       ['title', projectSchema.shape.title, cmd.title],
       ['purpose', textSchema.optional(), cmd.purpose],
       ['boundary', textSchema.optional(), cmd.boundary],
@@ -1345,7 +1356,7 @@ export class ProjectStateKernel {
     }
     const actorGuard = this.#requireKnownActor('create_project', cmd.actor);
     if (actorGuard !== undefined) return actorGuard;
-    const projectId = uuidv7();
+    const projectId = cmd.project_id ?? uuidv7();
     this.#append('project.created', cmd.at, cmd.actor, {
       project_id: projectId,
       title: cmd.title,
@@ -1410,16 +1421,22 @@ export class ProjectStateKernel {
     if (!gate.ok) return gate;
     const invalid = invalidFields('update_policy', [
       ['at', instantSchema, cmd.at],
+      ['capture_privacy', capturePrivacySchema.optional(), cmd.capture_privacy],
       ['event_count_window', z.number().int().positive().optional(), cmd.event_count_window],
       ['time_window_days', z.number().positive().optional(), cmd.time_window_days],
     ]);
     if (invalid !== undefined) return { ok: false, error: invalid };
-    if (cmd.event_count_window === undefined && cmd.time_window_days === undefined) {
+    if (
+      cmd.event_count_window === undefined &&
+      cmd.time_window_days === undefined &&
+      cmd.capture_privacy === undefined
+    ) {
       return { ok: false, error: kernelErrors.forbidden('update_policy', { reason: 'no-op' }) };
     }
     // capturePolicySchema's bounds are exactly the invalidFields checks above;
     // the field gate is the field constraint's single authority at commands.
     this.#append('project.policy_updated', cmd.at, cmd.actor, {
+      ...(cmd.capture_privacy === undefined ? {} : { capture_privacy: cmd.capture_privacy }),
       actor: cmd.actor,
       reason: cmd.reason,
       ...(cmd.event_count_window === undefined
@@ -2552,7 +2569,7 @@ export class ProjectStateKernel {
   /**
    * Delivery — a promise to the physical world, gated in the fixed order:
    * project not active → unaccepted artifact → blocking hold → unclosed
-   * unknown effect. One OPEN attempt per (asset, target): a retry after
+   * unknown or executing effect. One OPEN attempt per (asset, target): a retry after
    * the business side rejects is a new attempt (attempt_no advances), but
    * never while one is open. Success appends a delivered event carrying
    * the delivering Participant id and the asset's content sha256 anchor.
@@ -2616,7 +2633,10 @@ export class ProjectStateKernel {
       return { ok: false, error: kernelErrors.blockingHold(blocking.map((h) => h.id)) };
     }
     const unknownEffects = Object.values(this.#draft.effects).filter(
-      (ef) => alive(ef) && ef.status === 'unknown' && ef.asset_ref === cmd.asset_id,
+      (ef) =>
+        alive(ef) &&
+        (ef.status === 'unknown' || ef.status === 'executing') &&
+        ef.asset_ref === cmd.asset_id,
     );
     if (unknownEffects.length > 0) {
       return {

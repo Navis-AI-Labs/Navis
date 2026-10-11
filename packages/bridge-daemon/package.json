@@ -14,14 +14,17 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -b tsconfig.json --pretty false",
+    "build": "tsc -b tsconfig.json --pretty false && node --input-type=module -e \"import { cpSync } from 'node:fs'; cpSync('src/persistence/migrations', 'dist/persistence/migrations', { recursive: true }); cpSync('src/security/windows-access.ps1', 'dist/security/windows-access.ps1');\"",
     "clean": "tsc -b tsconfig.json --clean",
     "typecheck": "tsc -p tsconfig.test.json --noEmit --pretty false"
   },
   "dependencies": {
-    "@navis/domain": "workspace:*"
+    "@navis/domain": "workspace:*",
+    "@navis/contracts": "workspace:*",
+    "zod": "4.4.3"
   },
   "devDependencies": {
-    "@types/node": "24.13.3"
+    "@types/node": "24.13.3",
+    "@navis/api": "workspace:*"
   }
 }

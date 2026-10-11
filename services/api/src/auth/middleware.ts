@@ -1,3 +1,4 @@
+import { uuidRefSchema } from '@navis/contracts';
 import { authenticateKey, type AuthenticateResult, type DeviceAuthDeps } from '@navis/application';
 import type { ProjectDirectory } from '@navis/domain';
 
@@ -76,11 +77,7 @@ export function withDeviceAuth(
 }
 
 function pathProjectId(input: unknown): readonly string[] {
-  /* v8 ignore next 1 -- the server always hands the route a merged record */
   if (input === null || typeof input !== 'object') return [];
-  const params = input as Record<string, unknown>;
-  const projectId = params['projectId'];
-  /* v8 ignore next 2 -- the router always hands a string for :projectId */
-  if (typeof projectId !== 'string') return [];
-  return [projectId];
+  const projectId = (input as Record<string, unknown>)['projectId'];
+  return projectId === undefined ? [] : [uuidRefSchema.parse(projectId)];
 }

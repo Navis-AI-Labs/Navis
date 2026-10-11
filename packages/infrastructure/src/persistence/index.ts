@@ -7,13 +7,19 @@ export {
   createPostgresCommandIntake,
   type PostgresCommandIntakeTx,
 } from './postgres/postgres-command-intake-tx.js';
-export { PostgresDeviceAuth } from './postgres/postgres-device-auth.js';
-export { PostgresEventStore } from './postgres/postgres-event-store.js';
+export {
+  PostgresDeviceAuth,
+  createDeviceAuthTransaction,
+} from './postgres/postgres-device-auth.js';
+export { PostgresEventStore, LOCAL_LEDGER_BYTES } from './postgres/postgres-event-store.js';
 export { PostgresProjectDirectory } from './postgres/postgres-project-directory.js';
 export {
   createConnection,
   runMigrations,
+  probeConnection,
   POOL_MAX,
   POOL_IDLE_TIMEOUT,
   POOL_MAX_LIFETIME,
 } from './postgres/connection.js';
+
+export { PostgresProjectWorkspace } from './postgres/postgres-project-workspace.js';

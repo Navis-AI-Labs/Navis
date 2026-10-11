@@ -201,9 +201,9 @@ describe('reconciliation: declaration pinned to behavior', () => {
     ).toBe(true);
   });
 
-  it('asset content baseline fields stay pinned (media_type/storage/ref/size/sha256, inline-ref exclusivity)', () => {
+  it('asset content baseline fields stay pinned (media_type/storage/ref/size/sha256/text, inline-ref exclusivity)', () => {
     const keys = Object.keys(assetContentSchema.shape).sort();
-    expect(keys).toEqual(['media_type', 'ref', 'sha256', 'size', 'storage']);
+    expect(keys).toEqual(['media_type', 'ref', 'sha256', 'size', 'storage', 'text']);
     const inline = assetContentSchema.safeParse({ media_type: 'text/plain', storage: 'inline' });
     expect(inline.success).toBe(true);
     const inlineWithRef = assetContentSchema.safeParse({

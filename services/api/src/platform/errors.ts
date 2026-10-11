@@ -1,3 +1,5 @@
+import { InvalidQueryCursorError, AssistanceCapacityError } from '@navis/application';
+import { EventStoreCapacityError } from '@navis/domain';
 import { type ZodError } from 'zod';
 
 import { createProblemDetails, type ProblemDetails } from '@navis/contracts';
@@ -105,7 +107,7 @@ export class ServiceUnavailableError extends ServiceError {
   readonly status = 503 as const;
   readonly code = 'SERVICE_UNAVAILABLE' as const;
   readonly title = 'Service Unavailable' as const;
-  readonly detail = 'The service is shutting down and is not accepting new work.';
+  readonly detail = 'The service is temporarily unable to accept this operation.';
   constructor() {
     super('Service Unavailable');
   }
@@ -159,7 +161,16 @@ function bounded(value: string, limit: number): string {
 
 /** Maps known service errors to their public status and detail. Unknown failures become a generic 500 without exposing their message. */
 export function toProblemDetails(error: unknown, context: RequestContextLike): ProblemDetails {
-  const serviceError = error instanceof ServiceError ? error : new InternalServerError(error);
+  const serviceError =
+    error instanceof AssistanceCapacityError
+      ? new AssistanceRateLimitError()
+      : error instanceof InvalidQueryCursorError
+        ? new BadRequestError('Invalid query cursor.')
+        : error instanceof EventStoreCapacityError
+          ? new LedgerCapacityError()
+          : error instanceof ServiceError
+            ? error
+            : new InternalServerError(error);
   const fields: Record<string, unknown> = {
     type: problemType(serviceError.code),
     title: serviceError.title,
@@ -202,4 +213,41 @@ export function toValidationProblem(error: ZodError, context: RequestContextLike
     fields['trace_id'] = context.trace_id;
   }
   return createProblemDetails(fields);
+}
+
+/** The operation was understood but conflicts with recorded project state or identity. */
+export class ConflictError extends ServiceError {
+  readonly status = 409;
+  readonly code = 'CONFLICT';
+  readonly title = 'Conflict';
+  readonly detail: string;
+  override readonly problemExtra: Readonly<Record<string, unknown>>;
+  constructor(detail: string, result?: unknown) {
+    super('Conflict');
+    this.detail = detail;
+    this.problemExtra = result === undefined ? {} : { result };
+  }
+}
+
+/** Capacity refusal preserves the last readable state and asks the operator to adjust the deployment budget. */
+export class LedgerCapacityError extends ServiceError {
+  readonly status = 413;
+  readonly code = 'LEDGER_CAPACITY_EXCEEDED';
+  readonly title = 'Project ledger capacity exceeded';
+  readonly detail =
+    'The configured project ledger budget has been reached; no partial state was returned or written.';
+  constructor() {
+    super('Project ledger capacity exceeded');
+  }
+}
+
+export class AssistanceRateLimitError extends ServiceError {
+  readonly status = 429;
+  readonly code = 'MODEL_CAPACITY_EXCEEDED';
+  readonly title = 'Model assistance capacity exceeded';
+  readonly detail =
+    'The model queue or rolling daily job budget is full. Retry later or ask the operator to adjust the configured budget.';
+  constructor() {
+    super('Model assistance capacity exceeded');
+  }
 }

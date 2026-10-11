@@ -1,4 +1,6 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
+import { uuidv7 } from '@navis/domain';
+import { canonicalWorkEventStrictSchema } from '@navis/contracts';
 
 import type { OutboxCaptureInput } from '../outbox/ports.js';
 
@@ -45,6 +47,9 @@ export interface ExtractOptions {
   readonly projectId: string;
   readonly privacyClass: 'metadata' | 'local-only';
   readonly newEventId?: () => string;
+  readonly sourceRuntime?: string;
+  readonly sourceSessionId?: string;
+  readonly occurredAt?: string;
 }
 
 const SUMMARY_CAP = 120;
@@ -118,19 +123,26 @@ export function extractSessionEvents(
   steps: readonly RawSessionStep[],
   options: ExtractOptions,
 ): OutboxCaptureInput[] {
-  const newEventId = options.newEventId ?? randomUUID;
+  const newEventId = options.newEventId ?? uuidv7;
   const eventIds = steps.map(() => newEventId());
   return steps.map((step, index) => {
     const content = stepContent(step);
-    const event = {
-      type: step.kind,
-      data: {
-        sha256: content.sha256,
-        length: content.length,
-        summary: content.summary,
-        ...(content.tool !== undefined ? { tool: content.tool } : {}),
+    const event = canonicalWorkEventStrictSchema.parse({
+      schema_version: 1,
+      event_type: step.kind,
+      occurred_at: options.occurredAt ?? new Date().toISOString(),
+      project_id: options.projectId,
+      source_runtime: options.sourceRuntime ?? 'navis-cli',
+      source_session_id: options.sourceSessionId ?? 'manual',
+      raw_ref: `session://${encodeURIComponent(options.sourceSessionId ?? 'manual')}#${String(index)}`,
+      extractor_version: '1',
+      confidence: 1,
+      review_status: 'pending',
+      payload: {
+        privacy: { sha256: content.sha256, char_length: content.length, summary: content.summary },
+        ...(content.tool === undefined ? {} : { tool_name: content.tool }),
       },
-    };
+    });
     const capture: OutboxCaptureInput = {
       event_id: eventIds[index] ?? '00000000-0000-7000-8000-000000000000',
       device_id: options.deviceId,

@@ -2,19 +2,19 @@
 
 ## Status
 
-Reviewed on 2026-10-10. This document separates implemented modules from the intended process composition. Remaining integration and release gates are recorded in [foundation readiness](foundation-readiness.md).
+This document defines implemented modules and planned process boundaries. Remaining integration and release gates are recorded in [foundation readiness](foundation-readiness.md).
 
-There are seven source-bearing workspace units. The API and local integration packages exist. Web and Worker remain planned. The ten ADR files retain their recorded `Proposed` status; implementation or OpenSpec archive status does not silently accept an ADR.
+There are seven source-bearing workspace units. The API and local integration packages exist. Web and a separately deployed Worker remain planned; the implemented model assistance worker runs within the API process. The ten historical ADRs retain their recorded `Proposed` status. ADR-0013 records the accepted local runtime decision; it does not change historical statuses.
 
 | Boundary       | Current implementation                                                                                                                                                                    |
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Domain         | Object schemas, single-project kernel, event history and replay, acceptance/delivery/hold gates, WorkRun/intervention, causal clocks, snapshot policy, strength advice, closed vocabulary |
 | Contracts      | Runtime schemas for transport primitives, Canonical Work Events, public Equip and Return, ingest, project query, device authorization and session hook                                    |
-| Application    | Snapshot capture, injected command dispatch, batch ingest, project queries, device authentication                                                                                         |
-| Infrastructure | In-memory and PostgreSQL persistence ports, SQL migrations, transaction-bound command intake                                                                                              |
+| Application    | Snapshot capture, authorized project commands/membership, atomic workspace operations, candidate model jobs, ingest, queries, device authentication/provisioning                          |
+| Infrastructure | In-memory and PostgreSQL adapters, transaction-bound workspace and device auth, bounded event store, leased model jobs and provider transport                                             |
 | API            | HTTP listener, authenticated route composition, adapter construction and resource cleanup                                                                                                 |
-| Bridge daemon  | Local IPC/lifecycle, bindings, keychain, SQLite Outbox, upload tick, extraction and context cache; business process composition is incomplete                                             |
-| CLI            | Public export entry and command invocation module; the declared executable is not present                                                                                                 |
+| Bridge daemon  | Installed process, private credentials, IPC, verified bindings, SQLite Outbox, canonical metadata capture, validated receipts, recovery and cursor-aware context                          |
+| CLI            | Installed executable delegates project, review, capture, sync and model operations to Bridge                                                                                              |
 | Web / Worker   | No source workspace; user workflow and runtime admission remain outstanding                                                                                                               |
 
 ## System ownership
@@ -22,7 +22,7 @@ There are seven source-bearing workspace units. The API and local integration pa
 The intended product separates local execution from shared project authority:
 
 ```text
-Human -> Web control plane -> API command/query boundary
+Human -> CLI / planned Web -> API command/query boundary
                                  |
                             Application
                                  |
@@ -37,7 +37,7 @@ Agent runtime -> hook / CLI -> Bridge daemon -> public API contracts
                         local SQLite + keychain
 ```
 
-This is an ownership diagram, not a claim that all arrows currently run. The service owns project state, accountable review and business audit. The Bridge owns device-local access, consent, credentials and offline transfer. The external Agent runtime owns its execution session. A synchronization acknowledgment records transport success; it does not accept a candidate or confirm delivery.
+CLI, Bridge and API paths run in the local profile. Web remains planned. The service owns project state, accountable review and business audit. The Bridge owns device-local access, consent, credentials and offline transfer. The external Agent runtime owns its execution session. A synchronization acknowledgment records transport success; it does not accept a candidate or confirm delivery.
 
 | Boundary       | Owns                                                                           | Must not own                                                |
 | -------------- | ------------------------------------------------------------------------------ | ----------------------------------------------------------- |
@@ -66,7 +66,7 @@ contracts -> no server implementation package
 
 Domain currently owns the EventStore, CommandInbox, DeviceAuth and ProjectDirectory ports. Infrastructure implements them; its transaction-bound intake also imports Application dispatch. This is an actual dependency, not a future placeholder.
 
-The intended local integration boundary consumes public contracts. The current Bridge package also imports Domain's lifecycle interface, and CLI imports Bridge and Contracts. Their eventual distribution boundary and the lifecycle contract's ownership need explicit review before package publication.
+The intended local integration boundary consumes public contracts. The current Bridge package also imports Domain's lifecycle interface, ID generation and canonical hashing; CLI imports Bridge and Contracts. Their eventual distribution boundary and the lifecycle contract's ownership need explicit review before package publication.
 
 Only `services/api/src/platform/composition.ts` may import Infrastructure inside the API source tree. It constructs the concrete adapters; other API modules consume public contracts, use cases and ports. The composition module is itself restricted to the four admitted server packages. TypeScript references follow the same build dependencies.
 
@@ -81,8 +81,11 @@ A new workspace unit requires a concrete consumer or independent runtime, releas
 - `platform/index.ts` is a process entry: load configuration, start the runtime and handle signals.
 - `platform/composition.ts` constructs adapters, runs migrations and releases the pool after HTTP shutdown or failed startup. Its signatures expose runtime behavior and ports, not concrete adapter unions.
 - `platform/routes.ts` installs the route factories and request-local identity scope. Ingest membership is checked against the event projects; the claimed device must match the authenticated caller.
-- `platform/config.ts` owns this service's environment mapping, defaults and startup validation. A supplied database URL must be a PostgreSQL URL; absence retains the current in-memory mode.
-- `packages/cli/src/index.ts` is a package export entry. Invocation parsing and dispatch live in `commands/invocation.ts`.
+- `platform/config.ts` owns this service's environment mapping, defaults and startup validation. `runtime-config.ts` resolves secret files and requires PostgreSQL for executable startup; injected test composition can use memory.
+- `packages/cli/src/index.ts` is a package export entry. Invocation parsing and dispatch live in `commands/invocation.ts`; `process/index.ts` is the executable.
+- Application `project/project-service.ts` coordinates current membership, replay and transactional commands; `project/kernel-command.ts` maps the public grammar to Domain. `auth/provision-device.ts` owns provisioning.
+- Infrastructure `postgres-project-workspace.ts` supplies transaction-bound ports, and `postgres-assistance-jobs.ts` owns lease/budget persistence. Application owns model-job policy; `platform/assistance-worker.ts` only supervises its execution.
+- Bridge `runtime/runtime.ts` owns resource lifetime and operation orchestration. `remote/` owns HTTP/receipt handling; existing binding, extraction and Outbox modules retain their policies. `scripts/local-instance.mjs` owns deployment, packaging and encrypted backup operations; `scripts/container/` owns API credential bootstrap.
 
 A package export entry and a process entry have different responsibilities. Neither is a place for unrelated policy or adapter implementation.
 
@@ -107,9 +110,9 @@ actor intent -> transport validation -> Application use case
              -> committed audit event -> rebuilt projection
 ```
 
-The kernel owns policy and replay but does not own a database connection. Command dispatch wraps an injected executor; the general public-command-to-ledger mapping remains unimplemented. A caller must not mistake a successful in-memory kernel call for a durable commit.
+The kernel owns policy and replay but does not own a database connection. Public command dispatch evaluates server-held grants and invokes the kernel inside one project-locked workspace transaction. Project creation, initial membership, directory state and retry outcomes commit with ledger events. A caller must not mistake a successful in-memory kernel call for a durable commit.
 
-Canonical Work Events are observations. Ingest validates and stores their payloads, but it does not execute `submitReturn` or `acceptAsset`. Explicitly validated observations advance the replay cursor without enacting business changes. Domain rejects non-kernel events without a validator. Full replay, snapshot restoration and integrity verification validate all payloads, including snapshot-covered history, and enforce common actor, schema and business-version checks. Ingest copies the committed ledger head's version rather than a possibly older snapshot version. The complete client producer and query read model still require integration.
+Canonical Work Events are observations. Ingest validates and stores their payloads, but it does not execute `submitReturn` or `acceptAsset`. Explicitly validated observations advance the replay cursor without enacting business changes. Domain rejects non-kernel events without a validator. Full replay, snapshot restoration and integrity verification validate all payloads, including snapshot-covered history, and enforce common actor, schema and business-version checks. Ingest copies the committed ledger head's version rather than a possibly older snapshot version. Bridge emits the canonical contract and hashes the complete canonical event. Ingest records authenticated collector attribution and rechecks capture policy.
 
 Version meanings remain separate:
 
@@ -123,7 +126,7 @@ Version meanings remain separate:
 
 Domain `state/projection.ts` owns runtime projection shapes; `state/snapshot.ts` validates and restores snapshots; `state/strength.ts` provides deterministic retention advice. Capture orchestration is in Application and consumes EventStore. Capture owns one observation, writes retention annotations before a snapshot, and never deletes ledger events.
 
-The service's current project query computes a business version through replay, then returns event labels grouped by family. It does not expose the complete kernel projection, and its current helper does not consume snapshots. Project directory search reads the relational project/member tables; a complete projection-writer path remains outstanding.
+Project reads replay a single bounded history observation and return the full projection, independent ledger cursor and business version. Current labels collapse by actual object identity; resolved intended directions leave the intended plane. Asset views apply lifecycle visibility. Directory state is updated in the command transaction. A configured ledger byte limit refuses reads/writes explicitly instead of returning partial authority. Snapshot optimization and long-term archival remain separate capacity work.
 
 Strength is a suggestion signal, not acceptance or automatic retirement. Causal comparison records concurrency; it does not reconcile content. Clock retirement has safety constraints but no executor.
 
@@ -136,12 +139,30 @@ Strength is a suggestion signal, not acceptance or automatic retirement. Causal 
 - Liveness, dependency readiness, graceful shutdown and durable commit are distinct guarantees.
 - Realtime transport, indexes and caches never replace the event authority.
 
-The root Compose file is a local-development convenience with loopback-only published ports. It runs the checkout's built API with PostgreSQL; it does not build an immutable product image. No complete external cloud deployment or production release is established by its existence.
+The Compose deployment declares two services in one project: `api` and `postgres`. The API image contains only the built service runtime; PostgreSQL owns a persistent data volume. API bootstrap copies mounted credentials into private volatile storage and drops privileges before importing the API process entry. PostgreSQL startup and shutdown use the database image's entry point. Only the API publishes a loopback host port; the database is available over the Compose network.
 
-## Remaining admission and acceptance work
+Compose owns initial dependency ordering, networking, volumes and each container's restart policy. It waits for PostgreSQL health before starting the API. The API owns its own bounded shutdown and model worker; it keeps serving liveness while database unavailability causes readiness to fail. Healthy probe requests use debug logs, while failures retain normal error classification. Container health does not, by itself, cause Docker to restart a live process. Native Bridge and SQLite remain client-side.
 
-1. Complete browser authorization and reconcile the full project read model with the accepted requirements.
-2. Verify the actual API and CLI process composition and built-package contents.
-3. Exercise the real Bridge producer against the real service response contract.
-4. Introduce the first human review workflow and asynchronous use case under their own reviewed behavior and runtime choices.
-5. Supply deployment, backup/restore, operational and release evidence before a production claim.
+## Local runtime scope
+
+The local profile supports separate human/agent device identities, server-authorized project commands, human review, durable offline observations and explicitly requested model candidates. A background model generation cannot accept assets or execute external tools. Capture supports metadata and local-only policy; raw transcript transfer is not implied.
+
+The verification register is [foundation readiness](foundation-readiness.md); reproducible setup, command examples and restore instructions are in [development](development.md). Browser authorization/UI, public TLS deployment, multi-host availability, general external-tool adapters and release promotion remain separate admission work.
+
+## Database support
+
+The server uses PostgreSQL 15+ semantics, including JSONB, row/advisory locks and PL/pgSQL triggers. Managed PostgreSQL may use the same adapter, subject to engine and permission checks. MySQL and SQL Server adapters are not implemented. Bridge SQLite is device-local storage and cannot replace the server database. Consuming projects connect through contracts and HTTP; their own storage technology is independent.
+
+## Host integration and tooling
+
+Bridge owns platform path resolution and private state access. Windows ACL policy lives in `packages/bridge-daemon/src/security/` and is shipped with the daemon; repository setup invokes the same native policy. Windows pipes are scoped by normalized profile paths, and long Unix profile paths use a bounded socket location. The installed launchers are generated by `scripts/client-installation.mjs` and delegate to a common Node entry. API container bootstrap remains Linux-specific.
+
+The tooling TypeScript project resolves the seven public workspace entries to their source modules for type-aware lint. Production compilation and package exports retain their own build boundaries; lint does not import stale declarations as its source of truth. Native setup/client tests run in the host CI matrix, while database and container deployment checks run in the Linux lane.
+
+`integrations/skills/navis/` contains the optional Agent instructions for the existing CLI. It is a distribution asset, not another workspace or runtime. The instance installer writes the machine's executable invocation only into the explicitly selected installed skill directory. Skill instructions cannot grant membership, change identity or bypass Application/Domain policy; automatic external-tool hook configuration remains separate.
+
+`scripts/package-deployment.mjs` owns package-manager artifact isolation for both API image builds and client installation. It materializes shared hard links, repairs the package's own alias to an internal relative link and refuses other external links. Neither artifact depends on the source checkout after installation.
+
+## Operational records
+
+Compose project/service/replica names describe deployment instances, independently of source packages. Scripts address stable Compose service names. Runtime events go to stdout/stderr and Docker's bounded rotating log driver; application request bodies and credentials are not operational log fields. API process lifecycle emits safe structured outcomes. PostgreSQL keeps failure summaries without default SQL/parameter or failing-row detail dumps. Business events and instance audit stay in their authoritative database stores and survive operational-log rotation. Centralized retention and alerting remain separate production acceptance work.

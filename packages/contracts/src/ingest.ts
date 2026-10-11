@@ -53,16 +53,20 @@ export const ingestRejectionSchema = z
 
 /** One event's outcome inside a batch response, keyed by its batch index. */
 export const ingestEventResultSchema = z
-  .strictObject({
-    index: z.number().int().min(0),
-    outcome: ingestEventOutcomeSchema,
-    rejection: ingestRejectionSchema.optional(),
-  })
-  .meta({ description: 'Per-event outcome in an ingest batch response.', id: 'IngestEventResult' });
+  .discriminatedUnion('outcome', [
+    z.strictObject({ index: z.number().int().min(0), outcome: z.literal('accepted') }),
+    z.strictObject({ index: z.number().int().min(0), outcome: z.literal('duplicate') }),
+    z.strictObject({
+      index: z.number().int().min(0),
+      outcome: z.literal('rejected'),
+      rejection: ingestRejectionSchema,
+    }),
+  ])
+  .meta({ description: 'One complete outcome for a sent batch index.', id: 'IngestEventResult' });
 
 /**
  * Per-event integrity claim. When the project enables server-side payload
- * verification, the service hashes the event payload and compares it against
+ * verification, the service hashes the canonical event envelope and payload and compares them against
  * this claim; a mismatch rejects the event with `payload-hash-mismatch`.
  */
 export const ingestEventHashClaimSchema = z
@@ -171,4 +175,35 @@ export function parseIngestRequest(input: unknown): IngestRequest {
 /** Producer path for a batch response. */
 export function encodeIngestResponse(input: unknown): IngestResponse {
   return ingestResponseSchema.parse(input);
+}
+
+/** Verifies that every sent index has exactly one coherent outcome before local deletion. */
+export function parseIngestReceipt(input: unknown, batchLength: number): IngestResponse {
+  const receipt = ingestResponseSchema.parse(input);
+  const results = receipt.event_results;
+  if (
+    results.length !== batchLength ||
+    new Set(results.map((r) => r.index)).size !== batchLength ||
+    results.some((r) => r.index >= batchLength)
+  )
+    throw new Error('invalid ingest receipt indexes');
+  for (const outcome of ['accepted', 'duplicate', 'rejected'] as const) {
+    const expected = results
+      .filter((r) => r.outcome === outcome)
+      .map((r) => r.index)
+      .sort((a, b) => a - b);
+    const actual = (
+      outcome === 'rejected' ? receipt.rejected.map((r) => r.index) : receipt[outcome]
+    ).toSorted((a, b) => a - b);
+    if (JSON.stringify(expected) !== JSON.stringify(actual))
+      throw new Error('inconsistent ingest receipt');
+  }
+  for (const result of results) {
+    if (result.outcome === 'rejected') {
+      const rejection = receipt.rejected.find((r) => r.index === result.index);
+      if (result.rejection.index !== result.index || result.rejection.token !== rejection?.token)
+        throw new Error('inconsistent ingest rejection');
+    }
+  }
+  return receipt;
 }

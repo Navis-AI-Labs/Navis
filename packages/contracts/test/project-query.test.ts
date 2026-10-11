@@ -200,8 +200,8 @@ describe('searchProjectsRequestSchema', () => {
     );
   });
 
-  it('rejects an empty query', () => {
-    expect(searchProjectsRequestSchema.safeParse({ query: '', limit: 20 }).success).toBe(false);
+  it('accepts an empty prefix for membership-scoped project listing', () => {
+    expect(searchProjectsRequestSchema.safeParse({ query: '', limit: 20 }).success).toBe(true);
   });
 });
 

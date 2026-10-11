@@ -1,3 +1,6 @@
+import { setTimeout as delay } from 'node:timers/promises';
+import fs from 'node:fs/promises';
+import type { LockLease } from './lock.js';
 import type { BridgeLifetimePort } from '@navis/domain';
 
 import type { IpcReply, IpcRequest } from './ipc.js';
@@ -10,7 +13,7 @@ import { PlatformKeychain } from './keychain.js';
 import type { DaemonPaths } from './paths.js';
 
 /**
- * Compose the per-user daemon. `ensureRunning` is the single entry point:
+ * Compose a user's profile daemon. `ensureRunning` is the single entry point:
  *
  * - Warm path — the IPC probe succeeds: the returned pid is the live holder,
  *   `created: false`.
@@ -41,6 +44,7 @@ export class NodeBridgeDaemon implements BridgeLifetimePort {
   readonly #now: () => string;
   readonly #exitHooks = new Set<() => void>();
   #running = false;
+  #lease: LockLease | undefined;
 
   constructor(deps: BridgeDaemonDeps) {
     this.#paths = deps.paths;
@@ -50,7 +54,7 @@ export class NodeBridgeDaemon implements BridgeLifetimePort {
     this.#ipc =
       deps.ipcFactory?.() ??
       new NodeIpcServer(async (request: IpcRequest): Promise<IpcReply> => {
-        /* v8 ignore next 2 -- ping is the only op the skeleton answers */
+        /* v8 ignore next 2 -- the default lifecycle-only listener accepts ping */
         if (request.op === 'ping') return pingHandler(() => ({ started_at: this.#now() }));
         return { ok: false, detail: `unknown-op:${request.op}` };
       });
@@ -75,7 +79,35 @@ export class NodeBridgeDaemon implements BridgeLifetimePort {
     const result = await lock.acquire();
     if (result.kind === 'held-by-live') return { pid: result.pid, created: false };
 
-    await this.#ipc.listen(this.#paths.socketPath);
+    this.#lease = result.lease;
+    try {
+      const peer = await ipcPing(this.#paths.socketPath, 250);
+      if (peer !== null) {
+        await this.#lease.release();
+        this.#lease = undefined;
+        return { pid: peer.pid, created: false };
+      }
+      if (process.platform !== 'win32') {
+        const existingSocket = await fs.lstat(this.#paths.socketPath).catch(() => null);
+        if (existingSocket !== null) {
+          if (!existingSocket.isSocket())
+            throw new Error('daemon socket path is occupied by another file');
+          await delay(50);
+          const peer = await ipcPing(this.#paths.socketPath, 250);
+          if (peer !== null) {
+            await this.#lease.release();
+            this.#lease = undefined;
+            return { pid: peer.pid, created: false };
+          }
+          await fs.unlink(this.#paths.socketPath);
+        }
+      }
+      await this.#ipc.listen(this.#paths.socketPath);
+    } catch (error) {
+      await result.lease.release();
+      this.#lease = undefined;
+      throw error;
+    }
     this.#running = true;
     return { pid: process.pid, created: true };
   }
@@ -85,6 +117,8 @@ export class NodeBridgeDaemon implements BridgeLifetimePort {
     if (!this.#running) return;
     this.#running = false;
     await this.#ipc.close();
+    await this.#lease?.release();
+    this.#lease = undefined;
     for (const hook of [...this.#exitHooks]) hook();
   }
 

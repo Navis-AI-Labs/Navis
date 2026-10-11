@@ -1,3 +1,6 @@
+import { uuidRefSchema } from '@navis/contracts';
+import type { ProjectService, AssistanceService, DeviceAuthTransaction } from '@navis/application';
+import { projectRoutes } from '../project/routes.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 import type { DeviceAuthPort, EventStore, ProjectDirectory } from '@navis/domain';
@@ -10,6 +13,9 @@ import { AuthorizationDeniedError } from './errors.js';
 import type { ServiceRoute } from './server.js';
 
 export interface ApiRouteDependencies {
+  readonly projects?: ProjectService;
+  readonly assistance?: AssistanceService;
+  readonly deviceAuthTransaction?: DeviceAuthTransaction;
   readonly eventStore: EventStore;
   readonly deviceStore: DeviceAuthPort;
   readonly projectDirectory: ProjectDirectory;
@@ -25,11 +31,16 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 function ingestProjectIds(input: unknown): readonly string[] {
   const events = record(input)?.['events'];
-  if (!Array.isArray(events)) return [];
-  return events.flatMap((entry: unknown) => {
-    const projectId = record(record(entry)?.['event'])?.['project_id'];
-    return typeof projectId === 'string' ? [projectId] : [];
-  });
+  if (!Array.isArray(events) || events.length > 500) return [];
+  return [
+    ...new Set(
+      events.flatMap((entry: unknown) => {
+        const projectId = record(record(entry)?.['event'])?.['project_id'];
+        const parsed = uuidRefSchema.safeParse(projectId);
+        return parsed.success ? [parsed.data] : [];
+      }),
+    ),
+  ];
 }
 
 /** The service and its integration tests share this authenticated route composition. */
@@ -40,6 +51,7 @@ export function createApiRoutes(deps: ApiRouteDependencies): readonly ServiceRou
     store: deps.deviceStore,
     now: deps.now,
     verificationBaseUrl: deps.verificationBaseUrl,
+    ...(deps.deviceAuthTransaction === undefined ? {} : { transact: deps.deviceAuthTransaction }),
   };
   const verified = (route: ServiceRoute, options: AuthOptions = {}): ServiceRoute => {
     const holder = (identity: DeviceIdentity): void => {
@@ -61,10 +73,21 @@ export function createApiRoutes(deps: ApiRouteDependencies): readonly ServiceRou
     projectDirectory: deps.projectDirectory,
     participantId: () => identities.getStore()?.value?.participantId ?? null,
   };
+  const projects = deps.projects;
   const ingest = ingestRoute({
     eventStore: deps.eventStore,
     now: deps.now,
     verifyPayloadHash: true,
+    ...(projects === undefined
+      ? {}
+      : {
+          participantId: queries.participantId,
+          canCapture: (projectId: string) => {
+            const participant = queries.participantId();
+            if (participant === null) throw new AuthorizationDeniedError();
+            return projects.canCapture(participant, projectId);
+          },
+        }),
   });
   const boundIngest: ServiceRoute = {
     ...ingest,
@@ -82,6 +105,11 @@ export function createApiRoutes(deps: ApiRouteDependencies): readonly ServiceRou
 
   return [
     ...deviceAuthRoutes({ deviceFlow }),
+    ...(deps.projects === undefined
+      ? []
+      : projectRoutes(deps.projects, queries.participantId, deps.assistance).map((route) =>
+          verified(route),
+        )),
     verified(boundIngest, { extractProjectIds: ingestProjectIds }),
     verified(getProjectStateRoute(queries)),
     verified(loadContextRoute(queries)),

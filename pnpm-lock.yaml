@@ -60,10 +60,19 @@ importers:
 
   packages/bridge-daemon:
     dependencies:
+      '@navis/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@navis/domain':
         specifier: workspace:*
         version: link:../domain
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
     devDependencies:
+      '@navis/api':
+        specifier: workspace:*
+        version: link:../../services/api
       '@types/node':
         specifier: 24.13.3
         version: 24.13.3
@@ -102,12 +111,18 @@ importers:
       '@navis/application':
         specifier: workspace:*
         version: link:../application
+      '@navis/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@navis/domain':
         specifier: workspace:*
         version: link:../domain
       postgres:
         specifier: 3.4.7
         version: 3.4.7
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
     devDependencies:
       '@types/node':
         specifier: 24.13.3

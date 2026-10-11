@@ -1,12 +1,13 @@
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
 /**
- * Single-instance advisory lock (spec: a daemon runs exactly once per user;
- * a second connect reuses it, never spawns).
+ * Single-instance advisory lock for one user's credential profile.
+ * Separate profiles keep independent holders and IPC endpoints.
  *
  * Two cooperators: the lock file carries the holder's pid, and its presence
- * answers "someone already holds this slot" atomically via O_EXCL. A pid
+ * answers "someone already holds this slot" through atomic hard-link publication. A pid
  * that no longer signals means the holder died (`SIGKILL`-safe): the new
  * starter steals the slot by replacing the stale entry. This is advisory,
  * not exclusion — the point is that cooperative callers converge on one
@@ -62,6 +63,16 @@ function livePidOf(content: string): number | null {
   try {
     // signal 0 is the "does this process exist" probe — throws only on death
     process.kill(pid, 0);
+    if (process.platform === 'linux') {
+      try {
+        const stat = fs.readFileSync(`/proc/${String(pid)}/stat`, 'utf8');
+        const state = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0];
+        // An unreaped child still accepts signal 0 but cannot serve IPC or retain a lease.
+        if (state === 'Z' || state === 'X') return null;
+      } catch {
+        // Restricted or unmounted procfs leaves the successful signal probe authoritative.
+      }
+    }
     return pid;
   } catch {
     return null;
@@ -76,13 +87,17 @@ export class NodeInstanceLock implements InstanceLockPort {
   }
 
   async acquire(): Promise<AcquireResult> {
-    await fs.promises.mkdir(path.dirname(this.#lockPath), { recursive: true });
+    await fs.promises.mkdir(path.dirname(this.#lockPath), { recursive: true, mode: 0o700 });
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        // O_EXCL: the create itself is the atomic test
-        const handle = await fs.promises.open(this.#lockPath, 'wx');
-        await handle.writeFile(String(process.pid));
-        await handle.close();
+        // Publish only a fully written PID record, so another starter cannot mistake an empty file for a dead owner.
+        const candidate = `${this.#lockPath}.${randomBytes(8).toString('hex')}`;
+        await fs.promises.writeFile(candidate, String(process.pid), { flag: 'wx', mode: 0o600 });
+        try {
+          await fs.promises.link(candidate, this.#lockPath);
+        } finally {
+          await fs.promises.unlink(candidate);
+        }
         return { kind: 'acquired', lease: new FilesystemLease(this.#lockPath, process.pid) };
       } catch (error) {
         /* v8 ignore next 2 -- EEXIST is the only codified outcome here */
@@ -92,7 +107,11 @@ export class NodeInstanceLock implements InstanceLockPort {
         const held = await this.probe();
         if (held !== null) return { kind: 'held-by-live', pid: held };
         // stale entry: the holder died mid-crash — reclaim and retry once
-        if (attempt === 0) await fs.promises.unlink(this.#lockPath);
+        if (attempt === 0)
+          await fs.promises.unlink(this.#lockPath).catch((failure: unknown) => {
+            if (!(failure instanceof Error) || (failure as NodeJS.ErrnoException).code !== 'ENOENT')
+              throw failure;
+          });
       }
     }
     /* v8 ignore start -- this point is reachable only when two processes steal the same dead slot */

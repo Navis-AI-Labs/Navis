@@ -14,14 +14,16 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -b tsconfig.json --pretty false && rm -rf dist/persistence/postgres/migrations && cp -R src/persistence/postgres/migrations dist/persistence/postgres/migrations",
+    "build": "tsc -b tsconfig.json --pretty false && node --input-type=module -e \"import { rmSync, cpSync } from 'node:fs'; rmSync('dist/persistence/postgres/migrations', { recursive: true, force: true }); cpSync('src/persistence/postgres/migrations', 'dist/persistence/postgres/migrations', { recursive: true });\"",
     "clean": "tsc -b tsconfig.json --clean",
     "typecheck": "tsc -p tsconfig.test.json --noEmit --pretty false"
   },
   "dependencies": {
     "@navis/domain": "workspace:*",
     "postgres": "3.4.7",
-    "@navis/application": "workspace:*"
+    "@navis/application": "workspace:*",
+    "@navis/contracts": "workspace:*",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "24.13.3"

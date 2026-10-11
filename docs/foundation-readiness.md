@@ -1,44 +1,40 @@
 # Foundation readiness
 
-Reviewed on 2026-10-10 for the service integrity correction. Readiness requires evidence from the real consumer; a module, an archived task or a proposed ADR alone does not complete a foundation. Module ownership is recorded in [architecture](architecture.md).
+This register describes implemented boundaries and the evidence required before submission or release. It contains no machine inventory, instance identifiers or individual test-run report. Architecture is defined in [architecture](architecture.md); setup and operation are documented in [development](development.md).
 
-| Foundation                                       | Observed state                                                                                                                      | Required before                           |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| Runtime and package-manager pinning              | Package and CI pin Node 24.19.0 / pnpm 11.22.0; verify runtime-manager selection                                                    | Reproducible contributor and CI execution |
-| Format, lint, type, test, build and import gates | Present; the API composition root has a precise adapter-import boundary                                                             | Implementation submission                 |
-| Public JSON, pagination, errors and correlation  | Schemas and HTTP adapter implemented                                                                                                | Cross-consumer conformance                |
-| Contract schema authority                        | Public schemas implemented; Bridge producer/consumer mismatch remains                                                               | Complete local synchronization            |
-| Domain ownership and immutability                | Kernel implemented; asset/effect read results are owned immutable copies                                                            | Trustworthy read and mutation boundaries  |
-| Application command and transaction boundary     | Injected dispatch and PostgreSQL transaction wrapper implemented; public business-command mapping absent                            | Durable public command execution          |
-| API configuration and startup                    | Validated configuration, thin process entry and adapter composition implemented                                                     | Accepted service composition              |
-| Logs, errors and traces                          | Modules and tests present; operating evidence remains outstanding                                                                   | Production service operation              |
-| Authentication and authorization                 | Device flow, ingest membership/device guards and participant-owned revocation implemented; browser authorization remains incomplete | Protected end-to-end workflow             |
-| Persistence and migrations                       | EventStore, snapshots and SQL migrations implemented; persisted observations validate in full and snapshot replay                   | Reliable ingest-to-query and restore      |
-| Local durability and packaging                   | SQLite modules implemented; built migration assets and runtime recovery composition incomplete                                      | Installed Bridge operation                |
-| Retry, cancellation and effects                  | Kernel states and upload tick implemented; executing-effect gate and end-to-end recovery need review                                | External effect execution                 |
-| Health and shutdown                              | HTTP liveness, shutdown and pool cleanup implemented; dependency readiness remains incomplete                                       | Deployable service acceptance             |
-| Backup, disaster recovery and retention          | No deployment restore or recovery evidence                                                                                          | Production deployment                     |
-| Browser interaction and accessibility            | Web workflow and runtime not admitted                                                                                               | First human review workflow               |
-| Artifact provenance and rollback                 | Local build-mount Compose only; no immutable release artifact                                                                       | Release promotion                         |
+## Implemented boundaries and required checks
 
-All ten ADRs still carry their recorded `Proposed` status. This register does not promote them or rewrite the historical review outcome. Confirm the decision record and the implemented behavior separately.
+| Boundary                | Implemented control                                                                        | Required verification                                                                     |
+| ----------------------- | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| Source and dependencies | Strict TypeScript, explicit exports, inward dependencies and pinned tooling                | `pnpm validate` and `pnpm dependencies:audit`                                             |
+| Command authority       | Persisted proposal/execution grants, human-only decisions and idempotent commands          | Application and API authorization, concurrency and transaction suites                     |
+| Read model              | Complete projection and independent ledger cursor from one bounded observation             | Query, snapshot, replay and capacity suites                                               |
+| Authentication          | Attributable device credentials, verifier-only key storage and owner-scoped revocation     | Device-flow, concurrent exchange/registration and HTTP isolation suites                   |
+| Bridge                  | Private configuration, SQLite durability, canonical capture and validated acknowledgments  | Real SQLite, IPC, installed-process and remote receipt suites                             |
+| Model assistance        | Explicit authorized requests, finite retries/budgets and candidate-only results            | Provider failure tests plus an operator-authorized real-provider check                    |
+| Database                | PostgreSQL server adapter and schema baseline; separate SQLite client persistence          | Real-engine constraints, rollback, concurrency and recovery suites                        |
+| Container lifetime      | Separate Compose services; dependency-aware API startup and independent process lifetimes  | Actual container startup, database-outage and API-recreation checks                       |
+| Deployment state        | Read-only root filesystem, private secret copies, persistent data volume and loopback HTTP | Fresh initialization, process identity, mounted storage and listener checks               |
+| Recovery                | Encrypted backups and isolated restoration using the same runtime                          | Backup authentication, restored credential acceptance and full projection/cursor equality |
 
-Use an explicitly identified disposable database for real-engine verification. Integration suites normalize blank database values to unconfigured; API startup rejects a supplied invalid URL. Direct driver construction still requires a validated connection string.
+Repository validation requires an explicitly designated disposable PostgreSQL database and no skipped required suites. Compiler, language-service and package installation checks cover different consumers; one is not evidence that another has run. Test and release systems retain their artifacts separately from product documentation.
 
-## Current verification
+## Logging boundary
 
-The 2026-10-10 local `pnpm validate` run passed all seven gates against a disposable PostgreSQL 15 database: 81 test files, 1,189 passed tests, zero skipped. Statement, line and function coverage were 100%; branch coverage was 96.34%. The dependency scan covered 440 modules and 803 dependencies.
+The local profile keeps Compose-generated names and uses bounded, compressed Docker log retention. Safe lifecycle/request/failure records remain observable; successful probes are debug-only. PostgreSQL statement, parameter and failing-row detail logging is disabled by default. Business audit is stored independently. This establishes local operational diagnostics, not durable centralized log retention or alert delivery; those remain release gates for broader production operation.
 
-This verifies the implemented slice. The incomplete CLI/daemon integration, browser authorization, current-state read model, executing-effect delivery policy and release operations remain outstanding as listed above.
+## Supported use and remaining release work
 
-## Submission review
+The headless interface provides project creation and membership, Work, Equip, Return, human acceptance, effect facts, delivery confirmation, explicit session capture and model candidates. Other projects consume the API or installed CLI and do not need to use the same database engine as Navis.
 
-The reproduced observation, producer and revocation failures are corrected in `service-integrity-hardening`:
+Docker Compose manages separate API and PostgreSQL containers in one project. The API waits for initial database readiness, reports later dependency failures and reconnects after recovery. Model assistance runs within the API, and the native Bridge runs on the client host. Persistent storage survives container recreation. This packaging does not provide multi-host availability.
 
-- Contracts owns strict payload validation, including nested session privacy fields. Tolerant consumers retain additive compatibility.
-- Application supplies that validator to Domain replay. Missing validation, malformed payloads and unknown event types fail closed; a snapshot cannot hide invalid observations.
-- Application authorizes revocation against target ownership. Installed-route tests prove foreign and missing targets receive the same 403 without changing device/key records. Invalid device-management credentials receive 401; owner revocation still invalidates the key immediately.
+Browser approval/UI, automatic adapters for every coding runtime, encrypted raw-transcript transport, public TLS deployment, multi-host recovery, monitoring/alerting and release promotion require their own accepted scope and evidence. A test pass does not establish those capabilities. Historical proposed ADRs retain their statuses; ADR-0013 owns the current instance packaging decision.
 
-The built API returned 200 for health and device-code creation, 401 for unauthenticated device management, and exited with code 0 after SIGTERM. Compose configuration validated. The PostgreSQL CI gate now checks the JSON report from the actual database run; its guard rejects skipped, failed and incomplete reports.
+## Host verification
 
-`pnpm dependencies:audit` could not complete on 2026-10-10 because the npm registry repeatedly reset the connection. This is an outstanding external check, not a clean vulnerability result; rerun it in CI before merge or release. No new external dependency is introduced by this correction. The full product and operational gaps above remain separate acceptance work.
+CI must exercise native setup, launcher argument handling, private-file rejection, profile isolation and daemon restart on Windows, macOS and Linux. Platform simulation can test path construction, but does not replace the native-host run. The server services run as Linux containers on all supported hosts. Source lint also has a no-generated-declaration regression test that proves valid workspace imports resolve while genuinely unsafe assignments remain rejected.
+
+Local-instance submission accepts Windows implementation review and portable regression evidence for launchers, non-ASCII paths, BOM input, ACL policy, profile-scoped IPC and process recovery. This scope does not claim observed native Windows execution. The three-host native CI matrix remains a prerequisite for advertising a tested cross-platform release; Linux Docker execution proves only the Linux runtime.
+
+The optional Navis skill uses the installed CLI and preserves the existing identity and authority boundaries. Its installer verifies that a client exists and keeps generated machine paths outside the repository. Installed-client invocation from another directory is verified separately from source-level tests.

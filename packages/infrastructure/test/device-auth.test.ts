@@ -4,7 +4,10 @@ import { createConnection, runMigrations } from '../src/persistence/postgres/con
 import type postgres from 'postgres';
 
 import { InMemoryDeviceAuth } from '../src/persistence/in-memory/in-memory-device-auth.js';
-import { PostgresDeviceAuth } from '../src/persistence/postgres/postgres-device-auth.js';
+import {
+  PostgresDeviceAuth,
+  createDeviceAuthTransaction,
+} from '../src/persistence/postgres/postgres-device-auth.js';
 import type { DeviceCodeRecord, DeviceKeyRecord, DeviceSessionRecord } from '@navis/domain';
 
 /**
@@ -470,4 +473,16 @@ describe.runIf(databaseUrl !== undefined)('PostgresDeviceAuth timestamp round-tr
     await store.consumeDeviceCode(row.device_code, AT);
     expect((await store.getDeviceCode(row.device_code))?.consumed_at).toBe(AT);
   });
+});
+
+it('binds device operations to the supplied transaction handle', async () => {
+  const tx = {} as postgres.TransactionSql;
+  const sql = {
+    begin: async (operation: (scope: postgres.TransactionSql) => Promise<unknown>) => operation(tx),
+  } as unknown as postgres.Sql;
+  expect(
+    await createDeviceAuthTransaction(sql)((store) =>
+      Promise.resolve(store instanceof PostgresDeviceAuth),
+    ),
+  ).toBe(true);
 });

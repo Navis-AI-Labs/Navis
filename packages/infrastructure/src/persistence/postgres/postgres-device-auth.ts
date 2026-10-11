@@ -1,3 +1,4 @@
+import type { DeviceAuthTransaction } from '@navis/application';
 import type postgres from 'postgres';
 import { instantSchema } from '@navis/domain';
 
@@ -55,6 +56,7 @@ export class PostgresDeviceAuth implements DeviceAuthPort {
              expires_at, interval_seconds, status, created_at, consumed_at
       FROM device_codes
       WHERE device_code = ${deviceCode}
+      FOR UPDATE
     `;
     const row = rows[0] as Record<string, unknown> | undefined;
     if (row === undefined) return null;
@@ -110,6 +112,7 @@ export class PostgresDeviceAuth implements DeviceAuthPort {
              refresh_token, expires_at, consumed_at, created_at
       FROM device_sessions
       WHERE session_token = ${sessionToken}
+      FOR UPDATE
     `;
     const row = rows[0] as Record<string, unknown> | undefined;
     if (row === undefined) return null;
@@ -230,4 +233,10 @@ export class PostgresDeviceAuth implements DeviceAuthPort {
       created_at: asInstant(row['created_at']),
     };
   }
+}
+
+/** Row locks in the auth adapter serialize consumption of one-shot authorization material. */
+export function createDeviceAuthTransaction(sql: postgres.Sql): DeviceAuthTransaction {
+  return async <T>(operation: (store: DeviceAuthPort) => Promise<T>): Promise<T> =>
+    (await sql.begin((tx) => operation(new PostgresDeviceAuth(tx)))) as T;
 }

@@ -1,6 +1,7 @@
 import type postgres from 'postgres';
 import {
   eventEnvelopeSchema,
+  EventStoreCapacityError,
   archivableEventTypes,
   immutableCopy,
   projectionSnapshotSchema,
@@ -19,11 +20,36 @@ import {
  * UNIQUE(project_id, seq) constraint inside the append transaction — two
  * racing appends with the same expected version cannot both succeed.
  */
+/** Local-instance replay budget; the adapter checks it under the project write lock. */
+export const LOCAL_LEDGER_BYTES = 8_388_608;
+
 export class PostgresEventStore implements EventStore {
   private readonly sql: postgres.Sql;
 
-  constructor(sql: postgres.Sql) {
+  constructor(
+    sql: postgres.Sql,
+    private readonly transactionBound = false,
+    private readonly maxLedgerBytes?: number,
+  ) {
     this.sql = sql;
+  }
+
+  async #transaction<T>(operation: (tx: postgres.TransactionSql) => Promise<T>): Promise<T> {
+    if (this.transactionBound) return operation(this.sql as postgres.TransactionSql);
+    return (await this.sql.begin(operation)) as T;
+  }
+
+  async #capacity(
+    sql: postgres.TransactionSql,
+    projectId: string,
+    incoming: readonly EventEnvelope[] = [],
+  ): Promise<void> {
+    if (this.maxLedgerBytes === undefined) return;
+    await sql`SELECT pg_advisory_xact_lock(hashtextextended(${projectId}, 0))`;
+    const [row] = await sql`SELECT
+      (SELECT COALESCE(sum(octet_length(payload::text)+octet_length(metadata::text)+512),0) FROM project_events WHERE project_id=${projectId}) +
+      (SELECT COALESCE(sum(octet_length((value->'payload')::text)+octet_length((value->'metadata')::text)+512),0) FROM jsonb_array_elements(${sql.json(incoming.map(({ payload, metadata }) => ({ payload, metadata })))})) AS bytes`;
+    if (Number(row?.['bytes']) > this.maxLedgerBytes) throw new EventStoreCapacityError();
   }
 
   async append(
@@ -64,7 +90,8 @@ export class PostgresEventStore implements EventStore {
     events: readonly EventEnvelope[],
     expectedSeq: number,
   ): Promise<void> {
-    await this.sql.begin(async (tx) => {
+    await this.#transaction(async (tx) => {
+      await this.#capacity(tx, projectId, events);
       // Head test-and-set: the last committed seq must equal the caller's expected version.
       const rows =
         await tx`SELECT seq FROM project_events WHERE project_id = ${projectId} ORDER BY seq DESC LIMIT 1`;
@@ -139,7 +166,8 @@ export class PostgresEventStore implements EventStore {
 
   async loadEvents(projectId: string, fromSeq: number): Promise<readonly EventEnvelope[]> {
     const cursor = Math.max(0, Math.floor(fromSeq)); // non-integral/negative cursors read from the start
-    const rows = await this.sql`
+    const read = async (sql: postgres.Sql): Promise<readonly EventEnvelope[]> => {
+      const rows = await sql`
       SELECT event_id, project_id, seq, aggregate_type, aggregate_id, aggregate_revision,
              event_type, event_schema_version, occurred_at, recorded_at, actor_participant_id,
              causation_id, correlation_id, idempotency_key, payload, metadata, privacy_class,
@@ -148,12 +176,18 @@ export class PostgresEventStore implements EventStore {
       WHERE project_id = ${projectId} AND seq >= ${cursor}
       ORDER BY seq ASC
     `;
-    return rows.map((row) => eventEnvelopeSchema.parse(fromRow(row as Record<string, unknown>)));
+      return rows.map((row) => eventEnvelopeSchema.parse(fromRow(row as Record<string, unknown>)));
+    };
+    if (this.maxLedgerBytes === undefined) return read(this.sql);
+    return this.#transaction(async (tx) => {
+      await this.#capacity(tx, projectId);
+      return read(tx);
+    });
   }
 
   async saveSnapshot(projectId: string, snapshot: ProjectionSnapshot): Promise<void> {
     const owned = immutableCopy(projectionSnapshotSchema.parse(snapshot));
-    await this.sql.begin(async (tx) => {
+    await this.#transaction(async (tx) => {
       const cursor =
         await tx`SELECT state_version FROM project_events WHERE project_id = ${projectId} AND seq = ${owned.seq}`;
       if (cursor[0] === undefined || Number(cursor[0]['state_version']) !== owned.state_version) {
@@ -209,7 +243,7 @@ export class PostgresEventStore implements EventStore {
     // Select committed rows in the database so large ranges never require
     // host-side iteration. Existing classifications must survive overlapping
     // captures, and absent events must not acquire retention marks.
-    return await this.sql.begin(async (tx) => {
+    return await this.#transaction(async (tx) => {
       const inserted = await tx`
         INSERT INTO event_retention_marks (project_id, seq, retention_class)
         SELECT pe.project_id, pe.seq, ${retentionClass}

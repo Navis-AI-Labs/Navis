@@ -1,37 +1,23 @@
-import { randomUUID } from 'node:crypto';
+import { uuidv7 } from '@navis/domain';
 
 import type { KeychainPort } from '../keychain.js';
 import type { DaemonPaths } from '../paths.js';
 import type { BindingTablePort, BindingRecord } from './ports.js';
 import { findTomlUp, parseTomlBytes, tomlFingerprint } from './toml.js';
 
-/**
- * The binding use case: a toml is a declaration, the server is the trust
- * basis. This is the whole sequence the CLI's `navis bridge link` drives:
- *
- * 1. walk the working directory up to find `navis.toml` (nearest-first);
- * 2. fingerprint its bytes;
- * 3. parse the two-key allowlist;
- * 4. reuse a matching fingerprint as an already-bound record (spec: equal
- *    fingerprint → the binding is still valid — no server round-trip);
- * 5. fingerprint mismatch → tamper, out (deliberate abort — a changed toml
- *    needs an owner-level re-bind, not silent drift);
- * 6. otherwise, verify with the server that the project exists and the
- *    device's participant is a member (spec: "inaccessible toml does not
- *    bind");
- * 7. persist the binding row — local-only by construction.
- */
+/** A declaration is bound only after membership verification; fingerprint changes require explicit reconfiguration. */
 
 export interface VerifierPort {
   /**
    * Asks the server whether this device key may bind this project. The
    * answer carries the verified participant id.
    */
-  verify(claim: {
-    projectId: string;
-    deviceKey: string;
-  }): Promise<
-    | { readonly ok: true; readonly participantId: string }
+  verify(claim: { projectId: string; deviceKey: string }): Promise<
+    | {
+        readonly ok: true;
+        readonly participantId: string;
+        readonly privacyClass?: 'metadata' | 'local-only';
+      }
     | { readonly ok: false; readonly reason: string }
   >;
 }
@@ -51,7 +37,7 @@ export interface BindServiceDeps {
   readonly bindings: BindingTablePort;
   readonly verifier: VerifierPort;
   /** The OS keychain the device key lives in (purpose: read, never write). */
-  readonly keychain: KeychainPort;
+  readonly keychain: Pick<KeychainPort, 'get'>;
   /** Where the daemon's keychain entry resides for this user. */
   readonly keychainRef: Pick<DaemonPaths, 'keychainService' | 'keychainAccount'>;
   readonly now: () => string;
@@ -86,7 +72,6 @@ export async function bindFromToml(
         binding: existing,
       };
     }
-    return { status: 'bound', binding: existing, reused: true };
   }
 
   // first contact: the server decides — the toml asserted, it did not trust
@@ -102,16 +87,21 @@ export async function bindFromToml(
     deviceKey,
   });
   if (!verified.ok) return { status: 'unbound-verify-failed', reason: verified.reason };
+  if (existing !== null) {
+    const binding = { ...existing, privacy_class: verified.privacyClass ?? 'metadata' };
+    await deps.bindings.put(binding);
+    return { status: 'bound', binding, reused: true };
+  }
 
   const binding: BindingRecord = {
-    binding_id: randomUUID(),
+    binding_id: uuidv7(),
     project_id: parsed.declaration.projectId,
     toml_path: hit.tomlPath,
     toml_fingerprint: fingerprint,
     device_id: deviceId,
     participant_id: verified.participantId,
     remote: parsed.declaration.remote,
-    privacy_class: 'metadata',
+    privacy_class: verified.privacyClass ?? 'metadata',
     bound_at: deps.now(),
     last_loaded_state_version: null,
     parent_binding_id: null,

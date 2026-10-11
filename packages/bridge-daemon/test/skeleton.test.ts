@@ -73,9 +73,37 @@ describe('resolveDaemonPaths', () => {
       uid: 0,
     });
     expect(win.dataDir).toBe('C:\\Users\\tester\\AppData\\Local\\navis-bridge');
-    expect(win.socketPath).toBe('\\\\.\\pipe\\navis-bridge-tester');
+    expect(win.socketPath).toMatch(/^\\\\\.\\pipe\\navis-bridge-[a-f0-9]{24}$/u);
     // the win lock file lives in data, not runtime (no per-boot dir there)
-    expect(win.lockPath).toBe(path.join(win.dataDir, 'daemon.lock'));
+    expect(win.lockPath).toBe(path.win32.join(win.dataDir, 'daemon.lock'));
+  });
+
+  it('isolates Windows profiles without exposing the user name in the endpoint', () => {
+    const base = { platform: 'win32' as const, home: 'C:\\Users\\tester', uid: 0 };
+    const human = resolveDaemonPaths({
+      ...base,
+      env: { NAVIS_HOME: 'C:\\Profiles\\human', USERNAME: 'tester' },
+    });
+    const agent = resolveDaemonPaths({
+      ...base,
+      env: { NAVIS_HOME: 'C:\\Profiles\\agent', USERNAME: 'tester' },
+    });
+    expect(human.socketPath).not.toBe(agent.socketPath);
+    expect(human.socketPath).not.toContain('tester');
+    expect(
+      resolveDaemonPaths({ ...base, env: { NAVIS_HOME: 'c:\\profiles\\HUMAN' } }).socketPath,
+    ).toBe(human.socketPath);
+  });
+
+  it('uses a bounded Unix socket path for deeply nested profiles', () => {
+    const profile = path.join(os.tmpdir(), 'nested'.repeat(30));
+    const resolved = resolveDaemonPaths({
+      platform: 'darwin',
+      env: { NAVIS_HOME: profile },
+      uid: 501,
+    });
+    expect(resolved.dataDir).toBe(profile);
+    expect(Buffer.byteLength(resolved.socketPath)).toBeLessThanOrEqual(100);
   });
 
   it('defaults read the live process environment', () => {

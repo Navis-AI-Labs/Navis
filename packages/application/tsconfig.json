@@ -8,7 +8,14 @@
     "tsBuildInfoFile": "./dist/application.tsbuildinfo",
     "types": ["node"]
   },
-  "references": [{ "path": "../domain" }],
+  "references": [
+    {
+      "path": "../domain"
+    },
+    {
+      "path": "../contracts"
+    }
+  ],
   "include": ["src/**/*.ts"],
   "exclude": ["test/**/*.ts"]
 }

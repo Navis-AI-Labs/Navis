@@ -16,6 +16,12 @@
     },
     {
       "path": "./services/api"
+    },
+    {
+      "path": "./packages/bridge-daemon"
+    },
+    {
+      "path": "./packages/cli"
     }
   ]
 }

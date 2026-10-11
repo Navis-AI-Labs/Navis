@@ -1,5 +1,6 @@
 import {
   parseProjectQueryRequest,
+  loadContextRequestSchema,
   projectQueryContractSchemaVersion,
   UnsupportedProjectQueryContractVersionError,
 } from '@navis/contracts';
@@ -113,18 +114,17 @@ export function loadContextRoute(deps: QueryRouteDeps): ServiceRoute {
       const to = params['to'];
       const cursor = params['cursor'];
       const limit = parseLimit(params['limit']);
-      /* v8 ignore next 1 -- the transport normalizes types to a non-empty array */
-      if (types.length === 0) throw new Error('types filter requires at least one type');
-      const body = await loadContext(deps.eventStore, {
+      const request = loadContextRequestSchema.parse({
         project_id: projectId,
         filter: {
-          types: types as never,
+          types,
           from: typeof from === 'string' ? from : undefined,
           to: typeof to === 'string' ? to : undefined,
         },
         cursor: typeof cursor === 'string' ? cursor : undefined,
         limit,
       });
+      const body = await loadContext(deps.eventStore, request);
       return {
         entries: [...body.entries],
         has_more: body.has_more,

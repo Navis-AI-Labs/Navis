@@ -12,3 +12,5 @@ export * from './auth/device-auth-route.js';
 export * from './auth/middleware.js';
 export * from './ingest/route.js';
 export * from './query/routes.js';
+
+export { createApiRuntime, type ApiRuntime } from './platform/composition.js';

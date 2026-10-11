@@ -1,149 +1,173 @@
-import { resolveDaemonPaths, type KeychainPort, type PlatformCode } from '@navis/bridge-daemon';
-import type { BridgeHookResult } from '@navis/contracts';
-
-/** Parses invocations and delegates operations to injected local ports. */
-
-export interface IpcClient {
-  send(socketPath: string, request: Record<string, unknown>): Promise<unknown>;
-}
+import { readFile, stat } from 'node:fs/promises';
+import path from 'node:path';
+import { parseArgs } from 'node:util';
+import {
+  bridgeRequestSchema,
+  declaredProjectId,
+  newRequestId,
+  type BridgeRequest,
+} from '@navis/bridge-daemon';
 
 export interface CliDeps {
-  readonly platform: PlatformCode;
-  readonly ipc: IpcClient;
-  readonly keychain: KeychainPort;
-  readonly now: () => string;
   readonly cwd: () => string;
-  readonly stdout: (line: string) => void;
-  readonly stderr: (line: string) => void;
+  readonly send: (request: BridgeRequest) => Promise<unknown>;
+  readonly stdout: (text: string) => void;
+  readonly stderr: (text: string) => void;
 }
 
-/** arg → parsed command: positional verb + flags map. */
-export interface CliInvocation {
-  readonly verb: string;
-  readonly args: readonly string[];
-  readonly flags: ReadonlyMap<string, string | true>;
+/** Parse only CLI syntax; the shared request schema owns operation validation. */
+export function parse(argv: readonly string[]) {
+  return parseArgs({
+    args: [...argv],
+    allowPositionals: true,
+    options: {
+      name: { type: 'string' },
+      remote: { type: 'string' },
+      'credential-file': { type: 'string' },
+      project: { type: 'string' },
+      id: { type: 'string' },
+      'request-id': { type: 'string' },
+      file: { type: 'string' },
+      participant: { type: 'string' },
+      action: { type: 'string' },
+      session: { type: 'string' },
+      job: { type: 'string' },
+      query: { type: 'string' },
+      cursor: { type: 'string' },
+      limit: { type: 'string' },
+      types: { type: 'string' },
+      from: { type: 'string' },
+      to: { type: 'string' },
+      'local-only': { type: 'boolean' },
+      help: { type: 'boolean' },
+    },
+  });
 }
 
-/** The verbs this slice admits. */
-export const CLI_VERBS = [
-  'init',
-  'status',
-  'session',
-  'bridge link',
-  'bridge unlink',
-  'bridge login',
-  'bridge hook',
-] as const;
-
-export type CliVerb = (typeof CLI_VERBS)[number];
-
-export function parse(argv: readonly string[]): CliInvocation {
-  const flags = new Map<string, string | true>();
-  const positionals: string[] = [];
-  for (let i = 0; i < argv.length; i++) {
-    const tok = argv[i];
-    /* v8 ignore next -- the loop bounds each index in the process argument array */
-    if (tok === undefined) continue;
-    if (tok.startsWith('--')) {
-      const eq = tok.indexOf('=');
-      if (eq >= 0) {
-        flags.set(tok.slice(2, eq), tok.slice(eq + 1));
-      } else {
-        const next = argv[i + 1];
-        if (next !== undefined && !next.startsWith('-')) {
-          flags.set(tok.slice(2), next);
-          i++;
-        } else {
-          flags.set(tok.slice(2), true);
-        }
-      }
-    } else {
-      positionals.push(tok);
-    }
-  }
-  const verbLength = positionals[0] === 'bridge' ? 2 : 1;
-  const verb = positionals.slice(0, verbLength).join(' ');
-  return { verb, args: positionals.slice(verbLength), flags };
+async function inputFile(file: string | undefined, cwd: string): Promise<unknown> {
+  if (file === undefined) throw new Error('--file is required');
+  const target = path.resolve(cwd, file);
+  if ((await stat(target)).size > 262_144) throw new Error('input file exceeds 256 KiB');
+  // Windows PowerShell's UTF-8 writer includes a BOM; it is encoding metadata, not JSON content.
+  return JSON.parse((await readFile(target, 'utf8')).replace(/^\uFEFF/u, '')) as unknown;
 }
 
-interface HookDeps {
-  readonly ipc: IpcClient;
-  readonly cwd: () => string;
-}
-
-async function dispatchHook(
-  invocation: CliInvocation,
-  deps: HookDeps,
-  socketPath: string,
-): Promise<BridgeHookResult> {
-  const tomlProjectId = invocation.flags.get('toml-project-id');
-  const request: Record<string, unknown> = {
-    op: 'hook.session.start',
-    hook: 'session.start',
-    cwd: deps.cwd(),
-    toml_present: invocation.flags.get('toml-present') === true,
-  };
-  if (typeof tomlProjectId === 'string') request['toml_project_id'] = tomlProjectId;
-  const reply = await deps.ipc.send(socketPath, request);
-  return reply as BridgeHookResult;
-}
-
-/** Returns command exit codes; transport and credential failures propagate to the process entry. */
-export async function run(invocation: CliInvocation, deps: CliDeps): Promise<number> {
-  const paths = resolveDaemonPaths({ platform: deps.platform });
-
-  switch (invocation.verb) {
-    case 'init': {
-      await deps.ipc.send(paths.socketPath, { op: 'init', cwd: deps.cwd() });
-      deps.stdout(`initialised binding for ${deps.cwd()}`);
-      return 0;
-    }
-    case 'status': {
-      const reply = await deps.ipc.send(paths.socketPath, { op: 'status' });
-      deps.stdout(JSON.stringify(reply));
-      return 0;
-    }
-    case 'session': {
-      const reply = await deps.ipc.send(paths.socketPath, { op: 'session.resume' });
-      deps.stdout(JSON.stringify(reply));
-      return 0;
-    }
-    case 'bridge link': {
-      const toml = invocation.flags.get('toml');
-      if (typeof toml !== 'string' || toml.length === 0) {
-        deps.stderr('bridge link requires --toml <path>');
-        return 2;
-      }
-      const reply = await deps.ipc.send(paths.socketPath, { op: 'bridge.link', toml });
-      deps.stdout(JSON.stringify(reply));
-      return 0;
-    }
-    case 'bridge unlink': {
-      const reply = await deps.ipc.send(paths.socketPath, { op: 'bridge.unlink' });
-      deps.stdout(JSON.stringify(reply));
-      return 0;
-    }
-    case 'bridge login': {
-      const key = invocation.flags.get('key');
-      if (typeof key !== 'string' || key.length === 0) {
-        deps.stderr('bridge login requires --key (format: <keyId>.<secret>)');
-        return 2;
-      }
-      await deps.keychain.set(
-        { service: paths.keychainService, account: paths.keychainAccount },
-        key,
+/** Executes one invocation through the Bridge; neither credentials nor remote transport live in CLI. */
+export async function run(argv: readonly string[], deps: CliDeps): Promise<number> {
+  try {
+    const { positionals, values } = parse(argv);
+    if (values.help || positionals.length === 0) {
+      deps.stdout(
+        'navis configure | init | projects | state | history | command | member | capture | sync | status | hook | assist | assist-status | stop\nUse --file for command/capture JSON; --project overrides navis.toml.',
       );
-      deps.stdout('device key stored in OS keychain');
       return 0;
     }
-    case 'bridge hook': {
-      const result = await dispatchHook(invocation, deps, paths.socketPath);
-      deps.stdout(JSON.stringify(result));
-      return result.status === 'unbound' ? 1 : 0;
+    if (positionals.length !== 1) throw new Error('expected one command');
+    const cwd = deps.cwd();
+    const key = values['request-id'] ?? newRequestId();
+    const project = (): string => values.project ?? declaredProjectId(cwd);
+    let request: unknown;
+    const verb = positionals[0] ?? '';
+    switch (verb) {
+      case 'configure':
+        request = {
+          op: 'configure',
+          remote: values.remote,
+          credential_file:
+            values['credential-file'] === undefined
+              ? undefined
+              : path.resolve(cwd, values['credential-file']),
+        };
+        break;
+      case 'init':
+        request = {
+          op: 'project.create',
+          request: { project_id: values.id ?? newRequestId(), title: values.name },
+          key,
+          cwd,
+        };
+        break;
+      case 'state':
+        request = { op: 'project.state', project_id: project() };
+        break;
+      case 'command':
+        request = {
+          op: 'project.command',
+          project_id: project(),
+          command: await inputFile(values.file, cwd),
+          key,
+        };
+        break;
+      case 'member':
+        request = {
+          op: 'project.member',
+          project_id: project(),
+          request: { participant_id: values.participant, action: values.action ?? 'grant' },
+          key,
+        };
+        break;
+      case 'capture':
+        request = {
+          op: 'capture',
+          event_id: key,
+          cwd,
+          step: await inputFile(values.file, cwd),
+          session_id: values.session ?? 'manual',
+          privacy: values['local-only'] ? 'local-only' : 'metadata',
+        };
+        break;
+      case 'history':
+        request = {
+          op: 'project.context',
+          request: {
+            project_id: project(),
+            filter: {
+              types: (values.types ?? 'session').split(','),
+              ...(values.from === undefined ? {} : { from: values.from }),
+              ...(values.to === undefined ? {} : { to: values.to }),
+            },
+            limit: Number(values.limit ?? 20),
+            ...(values.cursor === undefined ? {} : { cursor: values.cursor }),
+          },
+        };
+        break;
+      case 'projects':
+        request = {
+          op: 'project.search',
+          request: {
+            query: values.query ?? '',
+            limit: Number(values.limit ?? 20),
+            ...(values.cursor === undefined ? {} : { cursor: values.cursor }),
+          },
+        };
+        break;
+      case 'assist':
+        request = {
+          op: 'assistance.request',
+          project_id: project(),
+          request: await inputFile(values.file, cwd),
+          key,
+        };
+        break;
+      case 'assist-status':
+        request = { op: 'assistance.status', project_id: project(), job_id: values.job };
+        break;
+      case 'hook':
+        request = { op: 'hook.session.start', cwd, request_id: key };
+        break;
+      case 'sync':
+      case 'status':
+      case 'stop':
+        request = { op: positionals[0] };
+        break;
+      default:
+        throw new Error('unknown command; use --help');
     }
-    default: {
-      deps.stderr(`unknown verb: ${invocation.verb}`);
-      return 2;
-    }
+    const result = await deps.send(bridgeRequestSchema.parse(request));
+    deps.stdout(JSON.stringify(result, null, 2));
+    return 0;
+  } catch (error) {
+    deps.stderr(error instanceof Error ? error.message : 'CLI operation failed');
+    return 1;
   }
 }

@@ -8,11 +8,9 @@ import type { CommandInbox, CommandOutcome } from '@navis/domain';
  * outcome without re-invoking the executor; a submission missing its
  * idempotency key refuses before anything else happens.
  *
- * The command-to-ledger mapping is deliberately NOT owned here: no
- * canonical command mapping exists yet (event envelopes carry no aggregate
- * ancestry assignments today), so the caller injects the execution. This
- * capability guarantees the once-only envelope, not the command mapping
- * (change design D3).
+ * The caller owns command mapping and supplies the transaction-bound inbox
+ * and executor. Durable project operations must commit the inbox outcome
+ * and ledger writes in the same transaction.
  */
 
 /** Maximum canonical-JSON size of a storable outcome; larger submissions fail loudly. */
@@ -25,7 +23,7 @@ export interface DispatchRequest {
   readonly payload: unknown;
 }
 
-/** Executor returns the kernel-style result union; thrown errors leave the claim wedged. */
+/** Thrown errors require caller-owned rollback; a nontransactional inbox retains its claim. */
 export type CommandExecutor = (payload: unknown) => Promise<DispatchResultValue>;
 
 export type DispatchResultValue =

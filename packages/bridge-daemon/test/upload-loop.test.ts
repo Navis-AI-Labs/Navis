@@ -63,6 +63,25 @@ function makeInput(seed: string): OutboxCaptureInput {
   };
 }
 
+function receipt(outcomes: readonly ('accepted' | 'duplicate' | 'rejected')[]): string {
+  const event_results = outcomes.map((outcome, index) => ({
+    index,
+    outcome,
+    ...(outcome === 'rejected' ? { rejection: { index, token: 'ingest/schema-violation' } } : {}),
+  }));
+  return JSON.stringify({
+    data: {
+      contract_version: 1,
+      accepted: event_results.filter((r) => r.outcome === 'accepted').map((r) => r.index),
+      duplicate: event_results.filter((r) => r.outcome === 'duplicate').map((r) => r.index),
+      rejected: event_results.filter((r) => r.outcome === 'rejected').map((r) => r.rejection),
+      event_results,
+      server_supported_contract_versions: [1],
+      server_supported_event_schema_versions: [1],
+    },
+  });
+}
+
 describe('upload loop', () => {
   it('claims 50 rows and acks all of them — outbox ends empty', async () => {
     const setup = withLoop();
@@ -76,9 +95,7 @@ describe('upload loop', () => {
       send: (batch: readonly { event_id: string }[]) =>
         Promise.resolve({
           status: 200,
-          body: JSON.stringify({
-            results: batch.map((b) => ({ event_id: b.event_id, outcome: 'acked' as const })),
-          }),
+          body: receipt(batch.map(() => 'accepted')),
         }),
     };
     const slice = await tick(setup.outbox, sender, DEVICE, NOW);
@@ -121,16 +138,7 @@ describe('upload loop', () => {
       send: () =>
         Promise.resolve({
           status: 200,
-          body: JSON.stringify({
-            results: [
-              { event_id: accepted.event_id, outcome: 'acked' as const },
-              {
-                event_id: rejected.event_id,
-                outcome: 'rejected' as const,
-                reason: 'schema_invalid',
-              },
-            ],
-          }),
+          body: receipt(['accepted', 'rejected']),
         }),
     };
     await tick(setup.outbox, sender, DEVICE, NOW);
@@ -138,7 +146,7 @@ describe('upload loop', () => {
     expect(await setup.outbox.get(accepted.event_id)).toBeNull();
     const kept = await setup.outbox.get(rejected.event_id);
     expect(kept?.state).toBe('quarantined');
-    expect(kept?.keep_reason).toBe('schema_invalid');
+    expect(kept?.keep_reason).toBe('ingest/schema-violation');
   });
 
   it('does not contact the sender when there are zero pending rows', async () => {
@@ -197,7 +205,7 @@ describe('upload loop', () => {
     row = await setup.outbox.get(ev.event_id);
     expect(row?.retry_count).toBe(2);
 
-    // entries with a non-string event_id are skipped rather than crashing
+    // A structurally invalid receipt must retain every row for bounded retry.
     sender = {
       send: () =>
         Promise.resolve({
@@ -206,11 +214,10 @@ describe('upload loop', () => {
         }),
     };
     await tick(setup.outbox, sender, DEVICE, '2026-09-01T00:00:03.000Z');
-    // claimed rows never got an ack → they stay 'sending' (crash-recyclable),
-    // not silently re-classified — bounded: only ack is definitive delete.
+    // Invalid receipts do not strand claims in sending or delete captured data.
     row = await setup.outbox.get(ev.event_id);
-    expect(row?.state).toBe('sending');
-    expect(row?.retry_count).toBe(2);
+    expect(row?.state).toBe('pending');
+    expect(row?.retry_count).toBe(3);
   });
 
   it('increments retry_count on each failed tick', async () => {

@@ -25,6 +25,8 @@ const issuedEquipKeyOrder = [
   'boundary',
   'acceptance_criteria',
   'allowed_actions',
+  'allowed_proposals',
+  'allowed_executions',
   'issued_at',
   'status',
 ] as const;

@@ -10,3 +10,5 @@ CREATE TABLE context_cache (
 );
 
 CREATE INDEX context_cache_cached_at ON context_cache (cached_at);
+
+CREATE TABLE runtime_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);

@@ -121,7 +121,7 @@ export function registerDeviceRoute(deps: DeviceAuthRouteDeps): ServiceRoute {
 async function authenticatedParticipant(
   deps: DeviceAuthRouteDeps,
   headers: Record<string, string | string[] | undefined> | undefined,
-): Promise<{ participantId: string }> {
+): Promise<{ participantId: string; deviceId: string }> {
   const header = authorizationHeader(headers);
   if (header === undefined) throw new UnauthorizedError('device-auth/key-invalid');
   const auth = await authenticateKey(deps.deviceFlow, header);
@@ -130,7 +130,7 @@ async function authenticatedParticipant(
       auth.outcome === 'device_revoked' ? 'device-auth/device-revoked' : 'device-auth/key-invalid',
     );
   }
-  return { participantId: auth.participant_id };
+  return { participantId: auth.participant_id, deviceId: auth.device_id };
 }
 
 export function revokeDeviceRoute(deps: DeviceAuthRouteDeps): ServiceRoute {
@@ -174,6 +174,8 @@ export function listDevicesRoute(deps: DeviceAuthRouteDeps): ServiceRoute {
       const caller = await authenticatedParticipant(deps, headers);
       const devices = await listDevices(deps.deviceFlow, caller.participantId);
       return {
+        participant_id: caller.participantId,
+        device_id: caller.deviceId,
         devices: devices.map((d) => ({
           device_id: d.id,
           name: d.name,

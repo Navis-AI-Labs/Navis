@@ -119,3 +119,10 @@ export interface EventIdentity {
   readonly event_id: string;
   readonly device_id: string | null;
 }
+
+/** A configured ledger budget refuses a write or read rather than truncating authority. */
+export class EventStoreCapacityError extends Error {
+  constructor() {
+    super('project ledger capacity exceeded');
+  }
+}

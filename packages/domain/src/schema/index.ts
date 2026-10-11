@@ -83,6 +83,7 @@ export {
 
 export {
   projectSchema,
+  capturePrivacySchema,
   projectStatusSchema,
   stateVersionSchema,
   type Project,

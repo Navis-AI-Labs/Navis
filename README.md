@@ -11,7 +11,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/License-Custom-blue.svg" alt="License">
-  <img src="https://img.shields.io/badge/Status-Concept-orange.svg" alt="Status">
+  <img src="https://img.shields.io/badge/Status-Local%20Runtime-blue.svg" alt="Status">
 </p>
 
 <p align="center">
@@ -51,7 +51,9 @@ Agents enter a Project to work, then leave their results and experience behind. 
 
 ## Current Status
 
-The core domain model and API service composition are implemented and locally verified. CLI/Bridge integration and the end-to-end review and delivery workflow remain incomplete. See the [architecture status](docs/architecture.md) for the current engineering status.
+The non-UI local runtime is implemented: persistent projects, separate human/agent permissions, CLI/Bridge capture and synchronization, review and delivery commands, and candidate-only model assistance. Docker Compose manages one project with separate API and PostgreSQL containers, persistent database storage and dependency-aware API startup. Model assistance runs within the API, while CLI/Bridge runs on the client machine.
+
+Native client support targets Windows, macOS and Linux. Local submission accepts Windows implementation review and portable regression tests; native Windows CI is still required before claiming a tested cross-platform release. An optional Navis skill guides coding Agents through the installed CLI. The UI and public/hosted deployment remain outside this local profile. See [architecture](docs/architecture.md), [readiness gates](docs/foundation-readiness.md) and [setup and usage](docs/development.md).
 
 Contributions, Issues, and Discussions are welcome.
 

@@ -158,3 +158,34 @@ export {
   type StateChangeMarker,
   type TimePlaneItem,
 } from './project-query.js';
+
+export {
+  projectCommandSchema,
+  projectCommandMode,
+  createProjectRequestSchema,
+  projectMemberRequestSchema,
+} from './project-command.js';
+export type {
+  ProjectCommand,
+  CreateProjectRequest,
+  ProjectMemberRequest,
+} from './project-command.js';
+
+export { parseIngestReceipt } from './ingest.js';
+export {
+  projectSnapshotSchema,
+  projectProjectionSchema,
+  type ProjectSnapshot,
+} from './project-query.js';
+export { projectCapabilitiesSchema } from './equip-contract.js';
+export { deviceCredentialSchema, type DeviceCredential } from './device-auth.js';
+
+export {
+  assistanceRequestSchema,
+  assistanceStatusSchema,
+  type AssistanceRequest,
+} from './assistance.js';
+
+export { deviceListResponseSchema } from './device-auth.js';
+
+export { uuidRefSchema } from './wire-primitives.js';

@@ -14,6 +14,8 @@ import type { ServiceRoute } from '../platform/server.js';
 /** Maps the public ingest contract to the batch use case. The service composition authenticates and authorizes before this handler runs. */
 
 export interface IngestRouteDeps {
+  readonly canCapture?: (projectId: string) => Promise<boolean>;
+  readonly participantId?: () => string | null;
   /** The ledger; a concrete adapter is injected by the composition root. */
   readonly eventStore: EventStore;
   /** Per-project switch for server-side payload verification. */
@@ -40,12 +42,19 @@ export function ingestRoute(deps: IngestRouteDeps): ServiceRoute {
         throw error;
       }
 
+      const participantId = deps.participantId?.();
       const request: IngestBatchRequest = {
+        ...(participantId == null ? {} : { participantId }),
         deviceId: parsed.device_id,
         events: parsed.events,
       };
       const batch = await ingestBatch(
-        { eventStore: deps.eventStore, verifyPayloadHash: deps.verifyPayloadHash, now: deps.now },
+        {
+          eventStore: deps.eventStore,
+          verifyPayloadHash: deps.verifyPayloadHash,
+          now: deps.now,
+          ...(deps.canCapture === undefined ? {} : { canCapture: deps.canCapture }),
+        },
         request,
       );
 

@@ -36,6 +36,7 @@ describe('policy row seed', () => {
   it('seeds the accepted capture-window defaults at project creation', () => {
     const k = seedKernel();
     expect(k.projection.policy).toEqual({
+      capture_privacy: 'metadata',
       event_count_window: CAPTURE_EVENT_COUNT_WINDOW_DEFAULT,
       time_window_days: CAPTURE_TIME_WINDOW_DAYS_DEFAULT,
       updated_at: T0,
@@ -435,4 +436,30 @@ describe('due-ness and usability defensive edges', () => {
 });
 it('extractProjectionState throws naming the first missing projection field', () => {
   expect(() => extractProjectionState({ seq: 0, project: null })).toThrow(/missing the 'policy'/);
+});
+
+it('governs capture privacy without changing the business version and preserves it on replay', () => {
+  const kernel = seedKernel();
+  expect(
+    kernel.updatePolicy({
+      actor: AGENT,
+      at: T0,
+      reason: 'cannot elevate',
+      capture_privacy: 'local-only',
+      expected_version: 0,
+    }).ok,
+  ).toBe(false);
+  expect(
+    kernel.updatePolicy({
+      actor: HUMAN,
+      at: T0,
+      reason: 'confidential project',
+      capture_privacy: 'local-only',
+      expected_version: 0,
+    }).ok,
+  ).toBe(true);
+  expect(kernel.stateVersion).toBe(0);
+  expect(ProjectStateKernel.fromEvents(kernel.events).projection.policy?.capture_privacy).toBe(
+    'local-only',
+  );
 });

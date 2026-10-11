@@ -11,7 +11,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/License-Custom-blue.svg" alt="License">
-  <img src="https://img.shields.io/badge/Status-Concept-orange.svg" alt="Status">
+  <img src="https://img.shields.io/badge/Status-Local%20Runtime-blue.svg" alt="Status">
 </p>
 
 <p align="center">
@@ -56,7 +56,9 @@ Agent 进入 Project 工作，完成后将成果与经验沉淀回 Project。Age
 
 ## 当前状态
 
-核心领域模型与 API 服务组装已有实现并通过本地验证。CLI/Bridge 接入和端到端验收、交付流程仍未完成。当前工程进度见[架构现状](docs/architecture.md)。
+无 UI 的本地运行流程已实现：持久化项目、人类与 Agent 的独立权限、CLI/Bridge 采集与同步、验收和交付命令，以及仅生成候选的模型辅助。服务端由 Docker Compose 管理为一个项目，包含独立的 API 和 PostgreSQL 容器；数据库持久化存储，API 在数据库就绪后启动。模型辅助运行在 API 内，CLI/Bridge 运行在客户端机器上。
+
+原生客户端面向 Windows、macOS 和 Linux。本地运行范围的提交接受 Windows 实现审查和可移植回归测试；宣称三平台实测发布前仍需 Windows 原生 CI。可选的 Navis skill 指导 coding Agent 使用已安装 CLI。UI 和公网／托管部署不属于当前本地运行范围。详见[架构现状](docs/architecture.md)、[验收门禁](docs/foundation-readiness.md)和[配置与使用](docs/development.md)。
 
 欢迎 Issue、Discussion 或直接参与项目。
 

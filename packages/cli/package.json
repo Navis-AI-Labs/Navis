@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Navis CLI: stateless client for the per-user bridge daemon (init / status / session / bridge link / bridge unlink / bridge login / hook).",
+  "description": "Navis CLI for project commands, durable Bridge capture, synchronization and local instance connection.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -11,7 +11,7 @@
     }
   },
   "bin": {
-    "navis": "./dist/cli.js"
+    "navis": "./dist/process/index.js"
   },
   "files": [
     "dist"

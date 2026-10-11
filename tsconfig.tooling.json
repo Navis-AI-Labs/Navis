@@ -6,7 +6,22 @@
     "declarationMap": false,
     "noEmit": true,
     "sourceMap": false,
-    "types": ["node"]
+    "types": ["node"],
+    "paths": {
+      "@navis/contracts": ["./packages/contracts/src/index.ts"],
+      "@navis/domain": ["./packages/domain/src/index.ts"],
+      "@navis/application": ["./packages/application/src/index.ts"],
+      "@navis/infrastructure": ["./packages/infrastructure/src/index.ts"],
+      "@navis/bridge-daemon": ["./packages/bridge-daemon/src/index.ts"],
+      "@navis/cli": ["./packages/cli/src/index.ts"],
+      "@navis/api": ["./services/api/src/index.ts"]
+    }
   },
-  "include": ["vitest.config.ts"]
+  "include": [
+    "vitest.config.ts",
+    "packages/*/src/**/*.ts",
+    "packages/*/test/**/*.ts",
+    "services/*/src/**/*.ts",
+    "services/*/test/**/*.ts"
+  ]
 }

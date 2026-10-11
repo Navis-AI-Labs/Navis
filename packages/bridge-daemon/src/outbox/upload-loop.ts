@@ -1,3 +1,4 @@
+import { parseIngestReceipt } from '@navis/contracts';
 import type { OutboxPort } from '../outbox/ports.js';
 
 /** Advances one upload batch; the caller schedules the next attempt and owns crash recovery. */
@@ -6,6 +7,7 @@ import type { OutboxEvent } from '../outbox/ports.js';
 export interface HttpResponseLike {
   readonly status: number;
   readonly body: string;
+  readonly retryAfter?: string;
 }
 
 export interface HttpSenderLike {
@@ -26,47 +28,26 @@ export interface UploadLoopSlice {
 }
 
 const MAX_BATCH = 50;
-const BASE_BACKOFF_MS = 500;
-const MAX_BACKOFF_MS = 60_000;
-
-function exponentialMs(retries: number): number {
-  const clamped = Math.min(retries, 7);
-  return Math.min(BASE_BACKOFF_MS * 2 ** clamped, MAX_BACKOFF_MS);
-}
-
-function addIso(nowIso: string, ms: number): string {
-  return new Date(new Date(nowIso).getTime() + ms).toISOString();
-}
-
 interface ParsedReply {
   readonly acked: readonly string[];
   readonly rejected: readonly { eventId: string; reason: string }[];
   readonly transport: boolean;
 }
 
-function parseReply(body: string): ParsedReply {
+function parseReply(body: string, batch: readonly OutboxEvent[]): ParsedReply {
   try {
-    const parsed = JSON.parse(body) as Record<string, unknown>;
-    const results = parsed['results'];
-    if (!Array.isArray(results)) {
-      return { acked: [], rejected: [], transport: true };
-    }
+    const envelope = JSON.parse(body) as { data?: unknown };
+    const parsed = parseIngestReceipt(envelope.data, batch.length);
+    const results = parsed.event_results;
     const acked: string[] = [];
     const rejected: { eventId: string; reason: string }[] = [];
-    for (const entry of results) {
-      if (typeof entry !== 'object' || entry === null) continue;
-      const r = entry as Record<string, unknown>;
-      const eventId = r['event_id'];
-      if (typeof eventId !== 'string') continue;
-      if (r['outcome'] === 'acked') {
-        acked.push(eventId);
-      } else {
-        const reasonValue = r['reason'];
-        rejected.push({
-          eventId,
-          reason: typeof reasonValue === 'string' ? reasonValue : 'outcome-missing',
-        });
-      }
+    for (const result of results) {
+      const event = batch[result.index];
+      /* v8 ignore next 1 -- parseIngestReceipt already verified every index against this batch length */
+      if (event === undefined) throw new Error('receipt outside batch');
+      if (result.outcome === 'rejected') {
+        rejected.push({ eventId: event.event_id, reason: result.rejection.token });
+      } else acked.push(event.event_id);
     }
     return { acked, rejected, transport: false };
   } catch {
@@ -91,56 +72,34 @@ export async function tick(
     return { claimed: [], ackedCount: 0, retried: [], nextTickAt: nowIso };
   }
 
+  const retry = async (error?: string, notBefore?: string): Promise<UploadLoopSlice> => {
+    const released = await outbox.releaseSending(
+      claimed.map((row) => row.event_id),
+      notBefore,
+    );
+    const retried = released.map((row) => ({
+      eventIds: [row.eventId],
+      nextRetryAfter: row.retry_after ?? nowIso,
+    }));
+    return {
+      claimed,
+      ackedCount: 0,
+      retried,
+      nextTickAt: retried.map((row) => row.nextRetryAfter).sort()[0] ?? nowIso,
+      ...(error === undefined ? {} : { error }),
+    };
+  };
   let response: HttpResponseLike;
   try {
     response = await sender.send(claimed);
   } catch (error) {
-    const ids = claimed.map((r) => r.event_id);
-    await outbox.releaseSending(ids);
-    const stack: BackoffStep[] = ids.map((id) => ({
-      eventIds: [id],
-      nextRetryAfter: addIso(nowIso, exponentialMs(1)),
-    }));
-    return {
-      claimed,
-      ackedCount: 0,
-      retried: stack,
-      nextTickAt: addIso(nowIso, exponentialMs(claimed.length)),
-      ...(error instanceof Error ? { error: error.message } : {}),
-    };
+    return retry(error instanceof Error ? error.message : undefined);
   }
-
-  if (response.status < 200 || response.status >= 300) {
-    // HTTP-level rejection: release with backoff rather than quarantine — the
-    // server said it can't talk and the spec says "permanent failure" is
-    // a flavoursome outcome: acknowledges per-event, not an HTTP 502.
-    const ids = claimed.map((r) => r.event_id);
-    await outbox.releaseSending(ids);
-    const stack: BackoffStep[] = ids.map((id) => ({
-      eventIds: [id],
-      nextRetryAfter: addIso(nowIso, exponentialMs(1)),
-    }));
-    return {
-      claimed,
-      ackedCount: 0,
-      retried: stack,
-      nextTickAt: addIso(nowIso, exponentialMs(1)),
-      error: `http_${response.status.toString()}`,
-    };
-  }
-
-  const reply = parseReply(response.body);
-  if (reply.transport) {
-    // 2xx with an unreadable body — the server answer is unparseable, so
-    // treat it like a transport failure: release with backoff, never ack.
-    const ids = claimed.map((r) => r.event_id);
-    await outbox.releaseSending(ids);
-    const stack: BackoffStep[] = ids.map((id) => ({
-      eventIds: [id],
-      nextRetryAfter: addIso(nowIso, exponentialMs(1)),
-    }));
-    return { claimed, ackedCount: 0, retried: stack, nextTickAt: addIso(nowIso, exponentialMs(1)) };
-  }
+  // Transport refusals retain every row; only validated per-event rejections quarantine.
+  if (response.status < 200 || response.status >= 300)
+    return retry(`http_${String(response.status)}`, response.retryAfter);
+  const reply = parseReply(response.body, claimed);
+  if (reply.transport) return retry();
   if (reply.acked.length > 0) {
     await outbox.acknowledge(reply.acked);
   }

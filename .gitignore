@@ -35,3 +35,6 @@ temp/
 .eslintcache
 .openspec/
 
+
+# Local runtime credentials, backups, and deployment evidence
+.local/

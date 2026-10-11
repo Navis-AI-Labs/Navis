@@ -1,261 +1,244 @@
-import { describe, expect, it } from 'vitest';
-
-import { parse, run, type CliDeps, type CliInvocation } from '../src/index.js';
-
-/**
- * CLI routing is stateless — no module-level cache, every invocation re-reads
- * deps. The three hook outcomes map to the bridge-session-hook contract:
- * bound / reused / unbound.
- */
-
-interface DepsWithSpies extends CliDeps {
-  readonly stdoutLines: string[];
-  readonly stderrLines: string[];
-  readonly ipcCalls: Record<string, unknown>[];
-}
-
-function makeDeps(overrides?: Partial<CliDeps>): DepsWithSpies {
-  const stdoutLines: string[] = [];
-  const stderrLines: string[] = [];
-  const ipcCalls: Record<string, unknown>[] = [];
-  const fwdIpc = {
-    send: (path: string, request: Record<string, unknown>): Promise<unknown> => {
-      ipcCalls.push(request);
-      if (overrides?.ipc !== undefined) return overrides.ipc.send(path, request);
-      return Promise.resolve({ ok: true, pid: 42 });
-    },
-  };
-  return {
-    platform: 'darwin',
-    ipc: fwdIpc,
-    keychain: {
-      get: () => Promise.resolve(null),
-      set: () => Promise.resolve(),
-      delete: () => Promise.resolve(false),
-    },
-    now: () => '2026-09-01T00:00:00.000Z',
-    cwd: () => '/some/workdir',
-    stdout: (line: string) => {
-      stdoutLines.push(line);
-    },
-    stderr: (line: string) => {
-      stderrLines.push(line);
-    },
-    stdoutLines,
-    stderrLines,
-    ipcCalls,
-    ...(overrides !== undefined
-      ? {
-          ...(overrides.keychain !== undefined ? { keychain: overrides.keychain } : {}),
-          ...(overrides.now !== undefined ? { now: overrides.now } : {}),
-          ...(overrides.cwd !== undefined ? { cwd: overrides.cwd } : {}),
-        }
-      : {}),
-  };
-}
-
-function inv(payload: Partial<CliInvocation>): CliInvocation {
-  return {
-    verb: 'init',
-    args: [],
-    flags: new Map<string, string | true>(),
-    ...payload,
-  };
-}
-
-describe('navis cli · stateless command routing', () => {
-  it('init invokes daemon init over IPC with the resolved cwd', async () => {
-    const deps = makeDeps();
-    const code = await run(inv({ verb: 'init' }), deps);
-    expect(code).toBe(0);
-    expect(deps.ipcCalls[0]?.['op']).toBe('init');
-    expect(deps.ipcCalls[0]?.['cwd']).toBe('/some/workdir');
-  });
-
-  it('status sends a status op and echoes the reply as JSON', async () => {
-    const deps = makeDeps();
-    const code = await run(inv({ verb: 'status' }), deps);
-    expect(code).toBe(0);
-    expect(deps.ipcCalls[0]?.['op']).toBe('status');
-    expect(deps.stdoutLines[0]).toBe('{"ok":true,"pid":42}');
-  });
-
-  it('session sends a session.resume op', async () => {
-    const deps = makeDeps();
-    const code = await run(inv({ verb: 'session' }), deps);
-    expect(code).toBe(0);
-    expect(deps.ipcCalls[0]?.['op']).toBe('session.resume');
-  });
-
-  it('bridge link refuses to call the daemon without --toml', async () => {
-    const deps = makeDeps();
-    const code = await run(inv({ verb: 'bridge link' }), deps);
-    expect(code).toBe(2);
-    expect(deps.stderrLines[0]).toContain('--toml');
-    expect(deps.ipcCalls.length).toBe(0);
-  });
-
-  it('bridge link forwards the toml flag opaque — the daemon validates it', async () => {
-    const deps = makeDeps();
-    const code = await run(
-      inv({
-        verb: 'bridge link',
-        flags: new Map<string, string>([['toml', '/path/navis.toml']]),
-      }),
-      deps,
-    );
-    expect(code).toBe(0);
-    expect(deps.ipcCalls[0]?.['op']).toBe('bridge.link');
-    expect(deps.ipcCalls[0]?.['toml']).toBe('/path/navis.toml');
-  });
-
-  it('bridge unlink calls the daemon', async () => {
-    const deps = makeDeps();
-    const code = await run(inv({ verb: 'bridge unlink' }), deps);
-    expect(code).toBe(0);
-    expect(deps.ipcCalls[0]?.['op']).toBe('bridge.unlink');
-  });
-
-  it('bridge login stores the key in the OS keychain (never on disk)', async () => {
-    const stored: { service: string; account: string; secret: string }[] = [];
-    const deps = makeDeps({
-      keychain: {
-        get: () => Promise.resolve(null),
-        set: (ref, secret) => {
-          stored.push({ service: ref.service, account: ref.account, secret });
-          return Promise.resolve();
-        },
-        delete: () => Promise.resolve(false),
-      },
-    });
-    const code = await run(
-      inv({
-        verb: 'bridge login',
-        flags: new Map<string, string>([['key', 'key-id.secret-secret']]),
-      }),
-      deps,
-    );
-    expect(code).toBe(0);
-    expect(stored[0]?.secret).toBe('key-id.secret-secret');
-    expect(stored[0]?.service).toMatch(/^navis-bridge/u);
-    expect(deps.ipcCalls.length).toBe(0);
-  });
-
-  it('bridge login refuses an empty key with a named reason', async () => {
-    const deps = makeDeps();
-    const code = await run(inv({ verb: 'bridge login' }), deps);
-    expect(code).toBe(2);
-    expect(deps.stderrLines[0]).toContain('--key');
-  });
-
-  it('bridge hook of a first fire forwards the result with exit 0', async () => {
-    const deps = makeDeps({
-      ipc: {
-        send: () =>
-          Promise.resolve({
-            status: 'bound',
-            bound_source: 'toml',
-            event_id: 'e1',
-            project_id: 'p1',
-            change_marker: 'advanced',
-          }),
-      },
-    });
-    const code = await run(
-      inv({
-        verb: 'bridge hook',
-        flags: new Map<string, string | true>([['toml-present', true]]),
-      }),
-      deps,
-    );
-    expect(code).toBe(0);
-    const line = deps.stdoutLines[0];
-    expect(line).toBeDefined();
-    expect(JSON.parse(line ?? '')).toMatchObject({ status: 'bound' });
-    expect(deps.ipcCalls[0]?.['op']).toBe('hook.session.start');
-  });
-
-  it('bridge hook of a reused request returns the same event id with exit 0', async () => {
-    const deps = makeDeps({
-      ipc: {
-        send: () => Promise.resolve({ status: 'reused', event_id: 'e9' }),
-      },
-    });
-    const code = await run(inv({ verb: 'bridge hook' }), deps);
-    expect(code).toBe(0);
-    expect(JSON.parse(deps.stdoutLines[0] ?? '')).toMatchObject({ event_id: 'e9' });
-  });
-
-  it('bridge hook of an unbound session reports the reason and exits 1', async () => {
-    const deps = makeDeps({
-      ipc: {
-        send: () => Promise.resolve({ status: 'unbound', reason: 'no-navis-toml' }),
-      },
-    });
-    const code = await run(inv({ verb: 'bridge hook' }), deps);
-    expect(code).toBe(1);
-    expect(JSON.parse(deps.stdoutLines[0] ?? '')).toMatchObject({
-      status: 'unbound',
-      reason: 'no-navis-toml',
-    });
-  });
-
-  it('unknown verb exits 2 without touching the daemon', async () => {
-    const deps = makeDeps();
-    const code = await run(
-      inv({
-        verb: 'definitely-not-a-verb',
-      }),
-      deps,
-    );
-    expect(code).toBe(2);
-    expect(deps.ipcCalls.length).toBe(0);
-  });
-
-  it('two invocations in the same process are stateless — no cache bleed', async () => {
-    const deps = makeDeps();
-    const first = await run(inv({ verb: 'status' }), deps);
-    const second = await run(inv({ verb: 'status' }), deps);
-    expect(first).toBe(0);
-    expect(second).toBe(0);
-    expect(deps.ipcCalls.length).toBe(2);
-    expect(deps.ipcCalls[0]?.['op']).toBe('status');
-    expect(deps.ipcCalls[1]?.['op']).toBe('status');
-  });
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import type { BridgeRequest } from '@navis/bridge-daemon';
+import { parse, run, type CliDeps } from '../src/index.js';
+const PROJECT = '01924a61-7a1b-7c2d-8e3f-000000000001';
+const PERSON = '01924a61-7a1b-7c2d-8e3f-000000000002';
+const dirs: string[] = [];
+afterEach(() => {
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
-
-describe('command argument parsing', () => {
-  it('keeps positional arguments separate from a single-word command', () => {
-    expect(parse(['init', 'folder'])).toEqual({ verb: 'init', args: ['folder'], flags: new Map() });
-  });
-  it('parses bridge subcommands and both flag value forms', () => {
-    const result = parse(['bridge', 'link', '--toml', 'navis.toml', '--label=a=b', '--verbose']);
-    expect(result.verb).toBe('bridge link');
-    expect(result.flags).toEqual(
-      new Map<string, string | true>([
-        ['toml', 'navis.toml'],
-        ['label', 'a=b'],
-        ['verbose', true],
-      ]),
-    );
-  });
-  it('keeps adjacent boolean flags independent and permits an empty invocation', () => {
-    expect(parse(['status', '--json', '--quiet']).flags).toEqual(
-      new Map([
-        ['json', true],
-        ['quiet', true],
-      ]),
-    );
-    expect(parse([]).verb).toBe('');
-  });
-  it('forwards the declared project for a parsed hook command', async () => {
-    const deps = makeDeps({
-      ipc: { send: () => Promise.resolve({ status: 'unbound', reason: 'no_toml' }) },
+function fixture() {
+  const dir = mkdtempSync(path.join(tmpdir(), 'navis-cli-'));
+  dirs.push(dir);
+  writeFileSync(path.join(dir, 'navis.toml'), `project_id = "${PROJECT}"\n`);
+  const requests: BridgeRequest[] = [];
+  const output: string[] = [];
+  const errors: string[] = [];
+  const deps: CliDeps = {
+    cwd: () => dir,
+    send: (request) => {
+      requests.push(request);
+      return Promise.resolve({ ok: true });
+    },
+    stdout: (text) => output.push(text),
+    stderr: (text) => errors.push(text),
+  };
+  return { dir, requests, output, errors, deps };
+}
+describe('CLI operation boundary', () => {
+  it.each([{ args: [] }, { args: ['--help'] }])(
+    'help does not start a daemon: %j',
+    async ({ args }) => {
+      const f = fixture();
+      expect(await run(args, f.deps)).toBe(0);
+      expect(f.requests).toEqual([]);
+      expect(f.output[0]).toContain('configure');
+    },
+  );
+  it('passes connection location without copying credentials into the request', async () => {
+    const f = fixture();
+    expect(
+      await run(
+        ['configure', '--remote', 'http://127.0.0.1:8080', '--credential-file', 'device.json'],
+        f.deps,
+      ),
+    ).toBe(0);
+    expect(f.requests[0]).toEqual({
+      op: 'configure',
+      remote: 'http://127.0.0.1:8080',
+      credential_file: path.join(f.dir, 'device.json'),
     });
-    await run(
-      parse(['bridge', 'hook', '--toml-project-id', '01924a61-7a1b-7c2d-8e3f-000000000001']),
-      deps,
+  });
+  it('creates stable explicit project and command identities', async () => {
+    const f = fixture();
+    expect(
+      await run(
+        ['init', '--name', 'experiment', '--id', PROJECT, '--request-id', 'create-once'],
+        f.deps,
+      ),
+    ).toBe(0);
+    expect(f.requests[0]).toEqual({
+      op: 'project.create',
+      request: { project_id: PROJECT, title: 'experiment' },
+      key: 'create-once',
+      cwd: f.dir,
+    });
+  });
+  it('generates valid ids when not supplied', async () => {
+    const f = fixture();
+    expect(await run(['init', '--name', 'experiment'], f.deps)).toBe(0);
+    expect(JSON.stringify(f.requests[0])).toMatch(/-7[0-9a-f]{3}-/u);
+  });
+  it.each(['status', 'sync', 'stop'])('delegates %s', async (command) => {
+    const f = fixture();
+    expect(await run([command], f.deps)).toBe(0);
+    expect(f.requests).toEqual([{ op: command }]);
+  });
+  it('resolves state from the declaration unless explicitly overridden', async () => {
+    const f = fixture();
+    await run(['state'], f.deps);
+    await run(['state', '--project', PERSON], f.deps);
+    expect(f.requests).toEqual([
+      { op: 'project.state', project_id: PROJECT },
+      { op: 'project.state', project_id: PERSON },
+    ]);
+  });
+  it('rejects forged actor fields before sending a command', async () => {
+    const f = fixture();
+    writeFileSync(
+      path.join(f.dir, 'command.json'),
+      JSON.stringify({
+        type: 'work.create',
+        title: 'work',
+        reason: 'test',
+        expected_version: 0,
+        actor: PERSON,
+      }),
     );
-    expect(deps.ipcCalls[0]?.['toml_project_id']).toBe('01924a61-7a1b-7c2d-8e3f-000000000001');
+    expect(await run(['command', '--file', 'command.json'], f.deps)).toBe(1);
+    expect(f.requests).toEqual([]);
+  });
+  it.each(['', '\uFEFF'])(
+    'sends UTF-8 command JSON with its idempotency key (BOM %j)',
+    async (bom) => {
+      const f = fixture();
+      const command = { type: 'work.create', title: 'work', reason: 'test', expected_version: 0 };
+      writeFileSync(path.join(f.dir, 'command.json'), bom + JSON.stringify(command));
+      expect(await run(['command', '--file', 'command.json', '--request-id', 'once'], f.deps)).toBe(
+        0,
+      );
+      expect(f.requests[0]).toEqual({
+        op: 'project.command',
+        project_id: PROJECT,
+        command,
+        key: 'once',
+      });
+    },
+  );
+  it.each(['grant', 'revoke'])('requests membership %s', async (action) => {
+    const f = fixture();
+    expect(await run(['member', '--participant', PERSON, '--action', action], f.deps)).toBe(0);
+    expect(f.requests[0]).toMatchObject({
+      op: 'project.member',
+      request: { participant_id: PERSON, action },
+    });
+  });
+  it('defaults membership to grant', async () => {
+    const f = fixture();
+    expect(await run(['member', '--participant', PERSON], f.deps)).toBe(0);
+    expect(f.requests[0]).toMatchObject({ request: { action: 'grant' } });
+  });
+  it.each([false, true])('captures with explicit local-only policy: %s', async (local) => {
+    const f = fixture();
+    writeFileSync(
+      path.join(f.dir, 'step.json'),
+      JSON.stringify({ kind: 'user.message', body: 'private source' }),
+    );
+    expect(
+      await run(
+        [
+          'capture',
+          '--file',
+          'step.json',
+          ...(local ? ['--local-only', '--session', 'session-a'] : []),
+        ],
+        f.deps,
+      ),
+    ).toBe(0);
+    expect(f.requests[0]).toMatchObject({
+      op: 'capture',
+      privacy: local ? 'local-only' : 'metadata',
+      session_id: local ? 'session-a' : 'manual',
+    });
+  });
+  it('sends hook identity for repeat detection', async () => {
+    const f = fixture();
+    expect(await run(['hook', '--request-id', PERSON], f.deps)).toBe(0);
+    expect(f.requests[0]).toEqual({ op: 'hook.session.start', request_id: PERSON, cwd: f.dir });
+  });
+  it('submits assistance and polls by job id', async () => {
+    const f = fixture();
+    writeFileSync(
+      path.join(f.dir, 'assist.json'),
+      JSON.stringify({ prompt: 'propose a plan', expected_version: 0 }),
+    );
+    expect(await run(['assist', '--file', 'assist.json'], f.deps)).toBe(0);
+    expect(await run(['assist-status', '--job', PERSON], f.deps)).toBe(0);
+    expect(f.requests[1]).toMatchObject({ op: 'assistance.status', job_id: PERSON });
+  });
+  it.each([
+    { args: ['unknown'] },
+    { args: ['status', 'extra'] },
+    { args: ['command'] },
+    { args: ['configure'] },
+    { args: ['status', '--key', 'never-on-command-line'] },
+  ])('invalid invocation does not reach Bridge: %j', async ({ args }) => {
+    const f = fixture();
+    expect(await run(args, f.deps)).toBe(1);
+    expect(f.requests).toEqual([]);
+    expect(f.errors.length).toBe(1);
+  });
+  it('bounds input files', async () => {
+    const f = fixture();
+    writeFileSync(path.join(f.dir, 'large.json'), ' '.repeat(262145));
+    expect(await run(['command', '--file', 'large.json'], f.deps)).toBe(1);
+    expect(f.errors[0]).toContain('256 KiB');
+  });
+  it('reports Bridge failures and malformed input without success output', async () => {
+    const f = fixture();
+    expect(
+      await run(['state'], { ...f.deps, send: () => Promise.reject(new Error('offline')) }),
+    ).toBe(1);
+    expect(f.errors).toEqual(['offline']);
+    expect(f.output).toEqual([]);
+  });
+  it('handles non-Error adapter failures', async () => {
+    const f = fixture();
+    expect(
+      await run(['state'], {
+        ...f.deps,
+        send: () => {
+          // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- exercise an untyped adapter failure
+          return Promise.reject('offline');
+        },
+      }),
+    ).toBe(1);
+    expect(f.errors).toEqual(['CLI operation failed']);
+  });
+  it('parses flags without inventing additional positionals', () => {
+    expect(parse(['init', '--name=project']).positionals).toEqual(['init']);
+  });
+  it('requests paged history and project search without constructing opaque cursors', async () => {
+    const f = fixture();
+    expect(
+      await run(
+        [
+          'history',
+          '--types',
+          'work,session',
+          '--limit',
+          '5',
+          '--cursor',
+          'opaque',
+          '--from',
+          '2026-01-01T00:00:00.000Z',
+          '--to',
+          '2027-01-01T00:00:00.000Z',
+        ],
+        f.deps,
+      ),
+    ).toBe(0);
+    expect(f.requests[0]).toMatchObject({
+      op: 'project.context',
+      request: { cursor: 'opaque', limit: 5, filter: { types: ['work', 'session'] } },
+    });
+    expect(
+      await run(['projects', '--query', 'project', '--cursor', 'opaque', '--limit', '5'], f.deps),
+    ).toBe(0);
+    expect(await run(['projects'], f.deps)).toBe(0);
+    expect(await run(['history'], f.deps)).toBe(0);
   });
 });

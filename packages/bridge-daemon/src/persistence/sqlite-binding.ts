@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ensurePrivateDirectory } from '../security/private-files.js';
 
 import type { BindingRecord, BindingTablePort } from '../binding/ports.js';
 
@@ -38,34 +39,41 @@ function loadMigrations(): Migration[] {
 
 /** Opens a daemon database in WAL mode and applies pending migrations. */
 export function openDaemonDb(filePath: string): DatabaseSync {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  ensurePrivateDirectory(path.dirname(filePath));
   const db = new DatabaseSync(filePath);
-  // WAL >= readers-cohere while writer appends; NORMAL durability suits a
-  // machine-local buffer whose authoritative copy is the server.
+  // FULL preserves acknowledged local captures across power loss before upload.
   db.exec('PRAGMA journal_mode = WAL');
-  db.exec('PRAGMA synchronous = NORMAL');
+  db.exec('PRAGMA synchronous = FULL');
+  db.exec('PRAGMA busy_timeout = 5000');
+  db.exec('PRAGMA max_page_count = 65536');
+  fs.chmodSync(filePath, 0o600);
   // bookkeeping before migration: the checksum row can only land after the table exists
   db.exec(
     'CREATE TABLE IF NOT EXISTS schema_migrations (file TEXT PRIMARY KEY, checksum TEXT NOT NULL)',
   );
   const migrations = loadMigrations();
-  const stmt = db.prepare('SELECT file, checksum FROM schema_migrations');
-  const applied = new Map(
-    (stmt.all() as { file: string; checksum: string }[]).map((row) => [row.file, row.checksum]),
-  );
   for (const migration of migrations) {
-    const existing = applied.get(migration.file);
-    if (existing !== undefined) {
-      if (existing !== migration.checksum) {
-        throw new Error(`schema drift: ${migration.file} checksum mismatch`);
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const existing = db
+        .prepare('SELECT checksum FROM schema_migrations WHERE file=?')
+        .get(migration.file) as { checksum: string } | undefined;
+      if (existing !== undefined) {
+        if (existing.checksum !== migration.checksum)
+          throw new Error(`schema drift: ${migration.file} checksum mismatch`);
+      } else {
+        db.exec(migration.sqlite);
+        db.prepare('INSERT INTO schema_migrations (file, checksum) VALUES (?, ?)').run(
+          migration.file,
+          migration.checksum,
+        );
       }
-      continue;
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      db.close();
+      throw error;
     }
-    db.exec(migration.sqlite);
-    db.prepare('INSERT INTO schema_migrations (file, checksum) VALUES (?, ?)').run(
-      migration.file,
-      migration.checksum,
-    );
   }
   return db;
 }
@@ -134,7 +142,10 @@ export class SqliteBindingTable implements BindingTablePort {
           binding_id, project_id, toml_path, toml_fingerprint, device_id,
           participant_id, remote, privacy_class, bound_at,
           last_loaded_state_version, parent_binding_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+        ON CONFLICT(toml_path, device_id) DO UPDATE SET
+          privacy_class=excluded.privacy_class,
+          last_loaded_state_version=excluded.last_loaded_state_version`,
       )
       .run(
         record.binding_id,

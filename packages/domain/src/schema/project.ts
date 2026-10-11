@@ -37,3 +37,6 @@ export const projectSchema = z
 
 export type Project = z.infer<typeof projectSchema>;
 export type ProjectStatus = z.infer<typeof projectStatusSchema>;
+
+/** Supported automatic capture levels; evidence upload requires a separate admitted contract. */
+export const capturePrivacySchema = z.enum(['local-only', 'metadata']);

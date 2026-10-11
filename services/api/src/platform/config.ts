@@ -20,6 +20,16 @@ export const apiConfigSchema = z
     log_redaction_allowlist: z.array(z.string().min(1).max(128)).max(64),
     max_body_bytes: z.int().min(1).max(104_857_600),
     shutdown_timeout_ms: z.int().min(1).max(300_000),
+    max_ledger_bytes: z.int().min(1_048_576).max(134_217_728).optional(),
+    model: z
+      .strictObject({
+        base_url: z.url(),
+        name: z.string().min(1).max(128),
+        key: z.string().min(16).max(512),
+        daily_limit: z.int().min(1).max(10000).default(100),
+        pending_limit: z.int().min(1).max(1000).default(32),
+      })
+      .optional(),
     database_url: z
       .url({ protocol: /^postgres(?:ql)?$/ })
       .max(2_048)
@@ -69,6 +79,26 @@ export function loadApiConfig(env: Record<string, string | undefined> = process.
     max_body_bytes: numberOr(env['NAVIS_API_MAX_BODY_BYTES'], defaultMaxBodyBytes),
     shutdown_timeout_ms: numberOr(env['NAVIS_API_SHUTDOWN_TIMEOUT_MS'], defaultShutdownTimeoutMs),
     database_url: env['DATABASE_URL'],
+    ...(env['NAVIS_API_MAX_LEDGER_BYTES'] === undefined
+      ? {}
+      : { max_ledger_bytes: Number(env['NAVIS_API_MAX_LEDGER_BYTES']) }),
+    ...(['NAVIS_MODEL_BASE_URL', 'NAVIS_MODEL_NAME', 'NAVIS_MODEL_API_KEY'].some(
+      (name) => env[name] !== undefined,
+    )
+      ? {
+          model: {
+            base_url: env['NAVIS_MODEL_BASE_URL'],
+            name: env['NAVIS_MODEL_NAME'],
+            key: env['NAVIS_MODEL_API_KEY'],
+            ...(env['NAVIS_MODEL_DAILY_LIMIT'] === undefined
+              ? {}
+              : { daily_limit: Number(env['NAVIS_MODEL_DAILY_LIMIT']) }),
+            ...(env['NAVIS_MODEL_PENDING_LIMIT'] === undefined
+              ? {}
+              : { pending_limit: Number(env['NAVIS_MODEL_PENDING_LIMIT']) }),
+          },
+        }
+      : {}),
   });
   if (!parsed.success) {
     throw new InvalidApiConfigError(

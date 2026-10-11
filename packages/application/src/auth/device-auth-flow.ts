@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 
 import {
   DEVICE_CODE_TTL_SECONDS,
@@ -40,7 +40,12 @@ function userCode(): string {
   return out.slice(0, 4) + '-' + out.slice(4);
 }
 
+export type DeviceAuthTransaction = <T>(
+  operation: (store: DeviceAuthPort) => Promise<T>,
+) => Promise<T>;
+
 export interface DeviceAuthDeps {
+  readonly transact?: DeviceAuthTransaction;
   readonly store: DeviceAuthPort;
   /** Receipt time; the kernel never reads a clock, the service stamps once per call. */
   readonly now: () => string;
@@ -85,7 +90,7 @@ export type PollTokenResult =
     };
 
 /** RFC 8628 §3.5: pending, denied, expired, or a one-shot session token. */
-export async function pollDeviceToken(
+async function pollDeviceTokenInStore(
   deps: DeviceAuthDeps,
   deviceCode: string,
 ): Promise<PollTokenResult | null> {
@@ -140,7 +145,7 @@ export interface RegisteredDevice {
  * The verifier stored is sha256(secret); the secret leaves this function in
  * the response and nowhere else.
  */
-export async function registerDevice(
+async function registerDeviceInStore(
   deps: DeviceAuthDeps,
   accessToken: string,
   name: string,
@@ -171,7 +176,7 @@ export async function registerDevice(
 }
 
 /** Returns false for missing or foreign-owned targets without mutating their device or keys. */
-export async function revokeDevice(
+async function revokeDeviceInStore(
   deps: DeviceAuthDeps,
   deviceId: string,
   reason: string | null,
@@ -220,7 +225,10 @@ export async function authenticateKey(
   const secret = token.slice(dot + 1);
   const key = await deps.store.getKeyById(keyId);
   if (key === null) return { outcome: 'key_invalid' };
-  if (deviceKeyVerifierFromSecret(secret) !== key.verifier) return { outcome: 'key_invalid' };
+  const expected = Buffer.from(key.verifier, 'hex');
+  const actual = Buffer.from(deviceKeyVerifierFromSecret(secret), 'hex');
+  if (expected.length !== actual.length || !timingSafeEqual(actual, expected))
+    return { outcome: 'key_invalid' };
   if (key.revoked_at !== null) return { outcome: 'device_revoked' };
   const device = await deps.store.getDevice(key.device_id);
   // a missing or revoked device denies identically: the caller learns neither
@@ -233,3 +241,40 @@ export async function authenticateKey(
 }
 
 export { deviceAuthDenialTokens };
+
+function deviceTransaction<T>(
+  deps: DeviceAuthDeps,
+  operation: (scoped: DeviceAuthDeps) => Promise<T>,
+): Promise<T> {
+  return deps.transact === undefined
+    ? operation(deps)
+    : deps.transact((store) => operation({ ...deps, store }));
+}
+
+/** Code exchange and consumption share one transaction in a persistent runtime. */
+export function pollDeviceToken(
+  deps: DeviceAuthDeps,
+  deviceCode: string,
+): Promise<PollTokenResult | null> {
+  return deviceTransaction(deps, (scoped) => pollDeviceTokenInStore(scoped, deviceCode));
+}
+
+/** Session consumption, device registration and key issuance commit atomically. */
+export function registerDevice(
+  deps: DeviceAuthDeps,
+  accessToken: string,
+  name: string,
+): Promise<RegisteredDevice | null> {
+  return deviceTransaction(deps, (scoped) => registerDeviceInStore(scoped, accessToken, name));
+}
+
+export function revokeDevice(
+  deps: DeviceAuthDeps,
+  deviceId: string,
+  reason: string | null,
+  actorId: string,
+): Promise<boolean> {
+  return deviceTransaction(deps, (scoped) =>
+    revokeDeviceInStore(scoped, deviceId, reason, actorId),
+  );
+}

@@ -1,3 +1,4 @@
+import { projectCapabilitiesSchema } from './equip-contract.js';
 import { z } from 'zod';
 
 import {
@@ -75,11 +76,40 @@ export const contextSummarySchema = z
   .meta({ description: 'Structured session-start context summary.', id: 'ContextSummary' });
 
 /**
- * State-change marker carried beside the summary. The daemon records the
- * state version it last loaded; an unchanged version yields `unchanged` and
- * the summary is served from cache, not re-fetched from the ledger.
+ * State-change marker carried beside the summary. The daemon compares ledger
+ * cursors so ordinary activity is detected even when the business version is
+ * unchanged. A cached response served during an outage is explicitly stale.
  */
 export const stateChangeMarkerSchema = z.enum(['advanced', 'unchanged', 'stale']);
+
+const projectionRow = z.record(z.string(), z.json());
+const projectionRows = z.record(z.string(), projectionRow);
+export const projectProjectionSchema = z.object({
+  seq: z.int().nonnegative(),
+  project: z
+    .object({
+      id: uuidRefSchema,
+      title: labelWireSchema,
+      status: labelWireSchema,
+      current_state_version: stateVersionWireSchema,
+      created_at: z.iso.datetime(),
+      updated_at: z.iso.datetime().optional(),
+    })
+    .loose()
+    .nullable(),
+  policy: projectionRow.nullable(),
+  participants: projectionRows,
+  works: projectionRows,
+  assets: projectionRows,
+  holds: projectionRows,
+  acceptances: projectionRows,
+  checkpoints: projectionRows,
+  deliveries: projectionRows,
+  effects: projectionRows,
+  equips: projectionRows,
+  work_runs: projectionRows,
+  intended_directions: projectionRows,
+});
 
 /**
  * `get_project_state` response. The projection is authoritative and
@@ -91,6 +121,8 @@ export const projectStateResponseSchema = z
     project_id: uuidRefSchema,
     state_version: stateVersionWireSchema,
     planes: projectStatePlanesSchema,
+    ledger_seq: z.int().nonnegative().optional(),
+    projection: projectProjectionSchema.optional(),
     change_marker: stateChangeMarkerSchema,
     cached_at: instantWireSchema.optional(),
   })
@@ -141,6 +173,8 @@ export const contextEntrySchema = z
     occurred_at: instantWireSchema,
     event_id: uuidRefSchema,
     summary: textWireSchema,
+    payload: z.record(z.string(), z.json()).optional(),
+    metadata: z.record(z.string(), z.json()).optional(),
   })
   .meta({ description: 'One ledger entry in a history slice.', id: 'ContextEntry' });
 
@@ -164,7 +198,7 @@ export const loadContextResponseSchema = z
 /** `search_projects` request. The membership filter is applied server-side, never client-side. */
 export const searchProjectsRequestSchema = z
   .strictObject({
-    query: labelWireSchema,
+    query: z.string().max(256),
     cursor: z
       .string()
       .min(1)
@@ -245,3 +279,14 @@ export function parseProjectQueryRequest(input: unknown): unknown {
   }
   return input;
 }
+
+/** Full project state is returned with an independent append cursor. */
+export const projectSnapshotSchema = z.object({
+  project_id: uuidRefSchema,
+  state_version: stateVersionWireSchema,
+  ledger_seq: z.int().nonnegative(),
+  capabilities: projectCapabilitiesSchema,
+  privacy_class: z.enum(['metadata', 'local-only']),
+  projection: projectProjectionSchema,
+});
+export type ProjectSnapshot = z.infer<typeof projectSnapshotSchema>;

@@ -39,26 +39,30 @@ export interface IpcServer {
 }
 
 /** A single connection's message framing: newline-delimited JSON. */
-function bindConnection(socket: net.Socket, handler: IpcHandler): void {
+interface IpcLimits {
+  readonly timeoutMs: number;
+  readonly maxFrameBytes: number;
+}
+
+function bindConnection(socket: net.Socket, handler: IpcHandler, limits: IpcLimits): void {
   let buffer = Buffer.alloc(0);
-
+  socket.setTimeout(limits.timeoutMs, () => socket.destroy());
   socket.on('data', (chunk: Buffer) => {
-    buffer = Buffer.concat([buffer, chunk]);
-    let newline = buffer.indexOf(0x0a);
-    while (newline >= 0) {
-      const frame = buffer.subarray(0, newline);
-      buffer = buffer.subarray(newline + 1);
-      if (frame.length > 0) void handleFrame(socket, frame, handler);
-      newline = buffer.indexOf(0x0a);
-    }
-  });
-
-  socket.on(
-    'error',
-    /* v8 ignore next 3 -- the peer disappearing mid-read is a client matter */ () => {
+    if (buffer.length + chunk.length > limits.maxFrameBytes) {
       socket.destroy();
-    },
-  );
+      return;
+    }
+    buffer = Buffer.concat([buffer, chunk]);
+    const newline = buffer.indexOf(0x0a);
+    if (newline < 0) return;
+    socket.pause();
+    if (buffer.subarray(newline + 1).length !== 0) {
+      socket.destroy();
+      return;
+    }
+    void handleFrame(socket, buffer.subarray(0, newline), handler);
+  });
+  socket.on('error', () => socket.destroy());
 }
 
 async function handleFrame(socket: net.Socket, frame: Buffer, handler: IpcHandler): Promise<void> {
@@ -75,14 +79,17 @@ async function handleFrame(socket: net.Socket, frame: Buffer, handler: IpcHandle
       /* v8 ignore next 1 -- JSON.parse and the handler are the only throwers */
       { ok: false, detail: error instanceof Error ? error.message : 'internal' };
   }
-  socket.write(`${JSON.stringify(reply)}\n`);
+  socket.end(`${JSON.stringify(reply)}\n`);
 }
 
 export class NodeIpcServer implements IpcServer {
   readonly #handler: IpcHandler;
   #server: net.Server | undefined;
 
-  constructor(handler: IpcHandler) {
+  constructor(
+    handler: IpcHandler,
+    private readonly limits: IpcLimits = { timeoutMs: 30_000, maxFrameBytes: 524_288 },
+  ) {
     this.#handler = handler;
   }
 
@@ -93,9 +100,14 @@ export class NodeIpcServer implements IpcServer {
    * comes from this binding).
    */
   async listen(socketPath: string): Promise<void> {
-    await fs.promises.mkdir(path.dirname(socketPath), { recursive: true });
+    if (process.platform !== 'win32') {
+      await fs.promises.mkdir(path.dirname(socketPath), { recursive: true, mode: 0o700 });
+      const stat = await fs.promises.stat(path.dirname(socketPath));
+      if (stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0)
+        throw new Error('daemon runtime directory must be private and user-owned');
+    }
     const server = net.createServer((socket) => {
-      bindConnection(socket, this.#handler);
+      bindConnection(socket, this.#handler, this.limits);
     });
     await new Promise<void>((resolve, reject) => {
       server.on('error', (error: NodeJS.ErrnoException) => {
@@ -105,6 +117,8 @@ export class NodeIpcServer implements IpcServer {
         resolve();
       });
     });
+    server.maxConnections = 32;
+    if (process.platform !== 'win32') await fs.promises.chmod(socketPath, 0o600);
     this.#server = server;
   }
 
@@ -125,14 +139,17 @@ export class NodeIpcServer implements IpcServer {
  * the holding process's pid so the single-instance gate can decide reuse
  * instead of trusting the lock file's pid alone.
  */
-export async function ipcPing(socketPath: string): Promise<{ pid: number } | null> {
+export async function ipcPing(
+  socketPath: string,
+  timeoutMs = 1000,
+): Promise<{ pid: number } | null> {
   return new Promise<{ pid: number } | null>((resolve) => {
     const socket = net.connect(socketPath);
     /* v8 ignore next 4 -- a dead peer that never connects can only hang one probe round */
     const timeout = setTimeout(() => {
       socket.destroy();
       resolve(null);
-    }, 1000);
+    }, timeoutMs);
 
     socket.on('connect', () => {
       socket.write(`${JSON.stringify({ op: 'ping' })}\n`);

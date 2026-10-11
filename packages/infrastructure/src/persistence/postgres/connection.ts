@@ -6,13 +6,16 @@ export const POOL_IDLE_TIMEOUT = 20; // seconds
 export const POOL_MAX_LIFETIME = 5 * 60; // seconds
 
 /**
- * Engine-neutral connection factory: any PostgreSQL 15+ wire endpoint
- * (Supabase, Neon, RDS, self-hosted, local Docker) is a DATABASE_URL away.
- * No platform SDK is involved.
+ * PostgreSQL 15+ connection factory. Managed PostgreSQL endpoints use the
+ * same driver; other SQL engines require their own persistence adapters.
  */
 export function createConnection(databaseUrl: string): postgres.Sql {
   return postgres(databaseUrl, {
     max: POOL_MAX,
+    // Driver notices are not application telemetry or operator-command output.
+    onnotice: () => undefined,
+    connect_timeout: 5,
+    connection: { statement_timeout: 15_000 },
     idle_timeout: POOL_IDLE_TIMEOUT,
     max_lifetime: POOL_MAX_LIFETIME,
   });
@@ -61,4 +64,23 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       await tx`INSERT INTO schema_migrations (version, checksum) VALUES (${version}, ${checksum})`;
     }
   });
+}
+
+/** A readiness query has a shorter deadline than ordinary database operations. */
+export async function probeConnection(sql: postgres.Sql, timeoutMs = 1500): Promise<void> {
+  const query = sql`SELECT 1`;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      query,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          query.cancel();
+          reject(new Error('database readiness deadline exceeded'));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }

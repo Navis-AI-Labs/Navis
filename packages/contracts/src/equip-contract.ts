@@ -30,6 +30,11 @@ export const equipCausalSnapshotSchema = z.record(
   z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
 );
 
+export const projectCapabilitiesSchema = z.strictObject({
+  allowed_proposals: z.array(z.string().min(1).max(128)).max(100),
+  allowed_executions: z.array(z.string().min(1).max(128)).max(100),
+});
+
 const equipShape = {
   id: uuidRefSchema,
   state_version: stateVersionWireSchema,
@@ -42,6 +47,8 @@ const equipShape = {
   boundary: textWireSchema.optional(),
   acceptance_criteria: z.array(textWireSchema).max(100).optional(),
   allowed_actions: z.array(labelWireSchema).max(100).optional(),
+  allowed_proposals: projectCapabilitiesSchema.shape.allowed_proposals.optional(),
+  allowed_executions: projectCapabilitiesSchema.shape.allowed_executions.optional(),
   issued_at: instantWireSchema,
   status: z.literal('active'),
 } as const;

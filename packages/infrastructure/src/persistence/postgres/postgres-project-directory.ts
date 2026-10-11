@@ -63,7 +63,7 @@ export class PostgresProjectDirectory implements ProjectDirectory {
 
   private toSummary(row: Record<string, unknown>): ProjectSummary {
     return {
-      project_id: String(row['id']),
+      project_id: String(row['project_id']),
       title: String(row['title']),
       status: String(row['status']),
       state_version: Number(row['current_state_version']),

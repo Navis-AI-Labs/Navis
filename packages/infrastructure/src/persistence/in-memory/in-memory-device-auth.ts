@@ -97,7 +97,7 @@ export class InMemoryDeviceAuth implements DeviceAuthPort {
     updatedBy: string;
   }): Promise<void> {
     const device = this.devices.get(input.deviceId);
-    if (device === undefined) return Promise.resolve();
+    if (device?.revoked_at !== null) return Promise.resolve();
     this.devices.set(input.deviceId, {
       ...device,
       revoked_at: input.revokedAt,

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { assetSchema } from '../schema/asset.js';
 import { causalClockSnapshotSchema } from '../schema/causal-clock.js';
 import { holdSchema } from '../schema/hold.js';
-import { projectSchema, stateVersionSchema } from '../schema/project.js';
+import { projectSchema, stateVersionSchema, capturePrivacySchema } from '../schema/project.js';
 import { workSchema } from '../schema/work.js';
 import { workRunSchema, interventionSessionSchema } from '../schema/workrun.js';
 import { instantSchema } from '../schema/time.js';
@@ -48,6 +48,7 @@ export const capturePolicySchema = z.strictObject({
 });
 
 const policyRowSchema = capturePolicySchema.extend({
+  capture_privacy: capturePrivacySchema.default('metadata'),
   updated_at: instantSchema.optional(),
   updated_by: uuidSchema.nullable().optional(),
 });

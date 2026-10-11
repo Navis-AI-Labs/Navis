@@ -1,4 +1,4 @@
--- 001_events.sql — Navis R0 kernel persistence. Plain SQL, idempotent, tracked in schema_migrations.
+-- PostgreSQL schema baseline, applied transactionally and tracked in schema_migrations.
 
 -- ============ migrations bookkeeping ============
 -- The runner (connection.ts) owns schema_migrations: it creates the table,
@@ -411,9 +411,8 @@ ON CONFLICT (project_id, seq) DO NOTHING;
 --
 -- A request authenticates at the left (who + which machine) and authorizes at
 -- the right (what this project admits). Deny is the default; the membership
--- row is the only grant. Membership is binary -- a member or not -- and the
--- descriptive `role` on participants is unenforced here so a future change
--- can activate it without a wire change.
+-- row holds separate proposal/execution grants. The descriptive `role` on
+-- participants does not confer permission; Domain evaluates persisted grants.
 --
 -- Key material is a one-way verifier only (sha256, constant-time compare in
 -- the adapter); no plaintext secret is ever persisted. Revocation is
@@ -423,7 +422,13 @@ ON CONFLICT (project_id, seq) DO NOTHING;
 CREATE TABLE IF NOT EXISTS project_members (
   participant_id uuid NOT NULL,
   project_id     uuid NOT NULL,
-  -- membership is a fact, not a cache: the row exists or it does not
+  -- Membership and grants are authoritative, distinct from replayed participant labels.
+  is_owner boolean NOT NULL DEFAULT false,
+  allowed_proposals jsonb NOT NULL DEFAULT '[]',
+  allowed_executions jsonb NOT NULL DEFAULT '[]',
+  CONSTRAINT project_member_capability_arrays CHECK (
+    jsonb_typeof(allowed_proposals) = 'array' AND jsonb_typeof(allowed_executions) = 'array'
+  ),
   created_at     timestamptz NOT NULL,
   deleted_at     timestamptz,
   CHECK (deleted_at IS NULL OR deleted_at >= created_at),
@@ -528,3 +533,33 @@ CREATE TRIGGER device_revocation_cascade
   FOR EACH ROW
   WHEN (OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL)
   EXECUTE FUNCTION device_revocation_cascades();
+
+-- Global identity is separate from per-project replayed participants.
+CREATE TABLE instance_principals (
+  id uuid PRIMARY KEY,
+  kind text NOT NULL CHECK (kind IN ('human', 'agent')),
+  display_name text NOT NULL CHECK (length(display_name) BETWEEN 1 AND 256),
+  created_at timestamptz NOT NULL,
+  disabled_at timestamptz
+);
+CREATE TABLE instance_audit (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  action text NOT NULL,
+  actor_id uuid NOT NULL,
+  target_id uuid NOT NULL,
+  occurred_at timestamptz NOT NULL
+);
+CREATE TRIGGER instance_audit_append_only BEFORE UPDATE OR DELETE ON instance_audit
+  FOR EACH ROW EXECUTE FUNCTION project_events_append_only();
+
+-- Model calls are retried independently of project command transactions.
+CREATE TABLE assistance_jobs (
+  id uuid PRIMARY KEY, project_id uuid NOT NULL, actor_id uuid NOT NULL,
+  idempotency_key text NOT NULL, payload_hash text NOT NULL, request jsonb NOT NULL,
+  status text NOT NULL CHECK (status IN ('pending','running','completed','failed')),
+  attempts integer NOT NULL DEFAULT 0, output text, result jsonb, error text,
+  claim_token uuid, lease_until timestamptz, available_at timestamptz NOT NULL DEFAULT now(),
+  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(project_id,idempotency_key)
+);
+CREATE INDEX assistance_jobs_pending ON assistance_jobs(available_at,created_at) WHERE status IN ('pending','running');

@@ -209,3 +209,20 @@ export function parseDeviceAuthRequest(input: unknown): unknown {
 export function deviceKeyVerifierFromSecret(keySecret: string): string {
   return createHash('sha256').update(keySecret, 'utf8').digest('hex');
 }
+
+export const deviceCredentialSchema = z.strictObject({
+  participant_id: uuidRefSchema,
+  participant_type: z.enum(['human', 'agent']),
+  device_id: uuidRefSchema,
+  key_id: uuidRefSchema,
+  key_secret: z.string().min(32).max(128),
+  issued_at: instantWireSchema,
+});
+export type DeviceCredential = z.infer<typeof deviceCredentialSchema>;
+
+/** The authenticated device identity is included so a client can verify its local credential metadata. */
+export const deviceListResponseSchema = z.object({
+  participant_id: uuidRefSchema,
+  device_id: uuidRefSchema,
+  devices: z.array(deviceListItemSchema),
+});

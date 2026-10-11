@@ -62,6 +62,7 @@ export interface OutboxPort {
    */
   releaseSending(
     eventIds: readonly string[],
+    notBefore?: string,
   ): Promise<readonly { eventId: string; retry_after: string | null }[]>;
   /**
    * Offload an event the binding said to keep local. Terminal state, `seq`

@@ -33,11 +33,11 @@ An OpenSpec design must list its selected standards. An implementation task must
 
 ## Current phase
 
-There are fifteen main specifications and nineteen archived changes as of the 2026-10-10 review. They cover the foundation, domain model, kernel, persistence, WorkRun, intended directions, causal comparison, schema vocabulary, snapshots, strength, public work contracts, command intake, Bridge lifecycle, session hook, and remote synchronization.
+There are sixteen main specifications and twenty archived changes after local-instance acceptance. They cover the foundation, domain model, kernel, persistence, WorkRun, intended directions, causal comparison, schema vocabulary, snapshots, strength, public work contracts, command intake, Bridge lifecycle, session hook, remote synchronization, and the headless local instance.
 
-Seven workspace units contain source: Contracts, Domain, Application, Infrastructure, Bridge daemon, CLI, and API. The remote-sync change is archived, but client/server interoperability and the product workflow remain incomplete. Archive status records the change lifecycle; it does not establish that every promised user workflow runs. Current implementation boundaries and remaining gates are recorded in `docs/architecture.md` and `docs/foundation-readiness.md`.
+Seven workspace units contain source: Contracts, Domain, Application, Infrastructure, Bridge daemon, CLI, and API. The accepted local-instance behavior implements client/server interoperability and the headless project workflow. Archive status records the change lifecycle; workflow readiness requires the separately recorded verification evidence. Current implementation boundaries and remaining gates are recorded in `docs/architecture.md` and `docs/foundation-readiness.md`.
 
-There is no active change. Web and Worker remain planned boundaries. Corrections to accepted behavior must retain the existing requirement and verification trace; new behavior or a material design change follows the review lifecycle below.
+`local-instance-runtime` is archived and its accepted behavior lives in `specs/local-instance/spec.md`. The local workflow includes a Compose project with separate API and PostgreSQL containers, native CLI/Bridge clients and an optional Agent skill. Model assistance is supervised within the API; Web and a separately deployed Worker remain planned boundaries. Local submission accepts Windows implementation review and portable regression evidence, while a tested cross-platform release still requires native CI. Corrections to accepted behavior must retain the existing requirement and verification trace; new behavior or a material design change follows the review lifecycle below.
 
 ## Project invariants
 

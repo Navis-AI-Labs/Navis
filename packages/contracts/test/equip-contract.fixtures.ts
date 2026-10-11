@@ -20,6 +20,8 @@ export const issuedEquipFixture = {
   boundary: 'front-end only; no schema migrations',
   acceptance_criteria: ['unit suite green', 'review recorded'],
   allowed_actions: ['work.record_progress', 'work.return'],
+  allowed_proposals: ['return.submit'],
+  allowed_executions: ['equip.issue'],
   issued_at: '2026-09-14T10:00:00.000Z',
   status: 'active',
 } as const;

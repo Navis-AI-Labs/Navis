@@ -34,14 +34,6 @@ import {
  * plain values; they never touch transport internals.
  */
 
-/**
- * The native handle behind a listening server. `node:http` exposes it without
- * a type; only the closer is needed, so the surface stays minimal.
- */
-interface ListenHandle {
-  close(): void;
-}
-
 /** An operation handler receives decoded parameters separately from credential headers. */
 export interface ServiceRoute {
   readonly method: string;
@@ -67,7 +59,9 @@ export class ApiServer {
   readonly #httpServer: Server;
   readonly #sockets = new Set<Socket>();
   #isShuttingDown = false;
-  #listenHandle: ListenHandle | null = null;
+  #activeRequests = 0;
+  #closing: Promise<void> | undefined;
+  #drained: (() => void) | undefined;
 
   readonly #healthz: ServiceRoute = {
     method: 'GET',
@@ -78,7 +72,12 @@ export class ApiServer {
     },
   };
 
-  constructor(config: ApiConfig, logger: StructuredLogger, routes: readonly ServiceRoute[] = []) {
+  constructor(
+    config: ApiConfig,
+    logger: StructuredLogger,
+    routes: readonly ServiceRoute[] = [],
+    readiness?: () => Promise<void>,
+  ) {
     this.#logger = logger;
     this.#maxBodyBytes = config.max_body_bytes;
     this.#shutdownTimeoutMs = config.shutdown_timeout_ms;
@@ -86,12 +85,25 @@ export class ApiServer {
       method: 'GET',
       path: '/readyz',
       requiresBody: false,
-      handle: () => Promise.resolve({ status: this.#isShuttingDown ? 'not_ready' : 'ready' }),
+      handle: async () => {
+        if (readiness !== undefined && !this.#isShuttingDown) {
+          try {
+            await readiness();
+          } catch {
+            throw new ServiceUnavailableError();
+          }
+        }
+        return { status: this.#isShuttingDown ? 'not_ready' : 'ready' };
+      },
     };
     this.#routes = [this.#healthz, readyz, ...routes];
     this.#httpServer = createServer((req, res) => {
       void this.#handle(req, res);
     });
+    this.#httpServer.requestTimeout = 30_000;
+    this.#httpServer.headersTimeout = 10_000;
+    this.#httpServer.keepAliveTimeout = 5_000;
+    this.#httpServer.maxConnections = 64;
     this.#httpServer.on('connection', (socket) => {
       this.#sockets.add(socket);
       socket.once('close', () => {
@@ -116,49 +128,30 @@ export class ApiServer {
 
   /** Rejects non-probe requests during a bounded drain, then closes remaining connections at the deadline. */
   close(): Promise<void> {
-    if (this.#isShuttingDown) {
-      return Promise.resolve();
-    }
+    if (this.#closing !== undefined) return this.#closing;
     this.#isShuttingDown = true;
-    // Detach the listening socket before asking the server to drain: the
-    // server's own closer would drop it, and with it every connection already
-    // queued behind the accept loop. The handle is held here and closed when
-    // draining finishes.
-    const serverHandle = this.#httpServer as unknown as {
-      _handle: ListenHandle | null | undefined;
-    };
-    const handle = serverHandle._handle;
-    if (handle !== undefined && handle !== null) {
-      serverHandle._handle = undefined;
-      this.#listenHandle = handle;
-    }
-    return new Promise<void>((resolve) => {
-      let settled = false;
-      const finish = (): void => {
-        const handle = this.#listenHandle;
-        if (handle !== null) {
-          this.#listenHandle = null;
-          handle.close();
-        }
-        if (!settled) {
-          settled = true;
+    this.#closing = new Promise<void>((resolve) => {
+      let started = false;
+      const beginClose = (): void => {
+        if (started) return;
+        started = true;
+        this.#httpServer.close(() => {
+          clearTimeout(timer);
           resolve();
-        }
+        });
       };
       const timer = setTimeout(() => {
-        for (const socket of this.#sockets) {
-          socket.destroy();
-        }
-        finish();
+        beginClose();
+        this.#httpServer.closeAllConnections();
       }, this.#shutdownTimeoutMs);
-      this.#httpServer.close(() => {
-        clearTimeout(timer);
-        finish();
-      });
+      this.#drained = beginClose;
+      if (this.#activeRequests === 0) beginClose();
     });
+    return this.#closing;
   }
 
   async #handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    this.#activeRequests += 1;
     const started = Date.now();
     const context = extractRequestContext(req.headers) ?? freshRequestContext();
     const traceId = traceIdFromParent(context.trace_parent);
@@ -170,7 +163,7 @@ export class ApiServer {
     try {
       const route = this.#lookupRoute(req);
       const isProbe = route.path === '/healthz' || route.path === '/readyz';
-      if (this.#isShuttingDown && !isProbe) {
+      if ((this.#isShuttingDown || this.#activeRequests > 16) && !isProbe) {
         throw new ServiceUnavailableError();
       }
       // path params are authoritative for identity and ride into the body
@@ -192,6 +185,9 @@ export class ApiServer {
       this.#logOutcome('request handled', logContext, req, notReady ? 503 : 200, started);
     } catch (error) {
       this.#handleError(error, context, logContext, req, res, started);
+    } finally {
+      this.#activeRequests -= 1;
+      if (this.#activeRequests === 0) this.#drained?.();
     }
   }
 
@@ -357,7 +353,13 @@ export class ApiServer {
   ): void {
     const fields: Record<string, unknown> = {
       method: req.method,
-      path: req.url,
+      path:
+        this.#routes.find(
+          (route) =>
+            route.path === (req.url ?? '').split('?')[0] ||
+            (route.path.includes(':') &&
+              this.#matchesPattern(route.path, (req.url ?? '').split('?')[0] ?? '')),
+        )?.path ?? 'unmatched',
       status,
       duration_ms: Date.now() - started,
       ...extra,
@@ -366,6 +368,11 @@ export class ApiServer {
       this.#logger.error(logContext, message, fields);
     } else if (status >= 400) {
       this.#logger.warn(logContext, message, fields);
+    } else if (
+      req.method === 'GET' &&
+      (fields['path'] === '/healthz' || fields['path'] === '/readyz')
+    ) {
+      this.#logger.debug(logContext, message, fields);
     } else {
       this.#logger.info(logContext, message, fields);
     }
@@ -379,6 +386,7 @@ export class ApiServer {
   ): void {
     const payload = JSON.stringify(body);
     res.writeHead(status, {
+      ...(status === 429 ? { 'retry-after': '3600' } : {}),
       'content-type': contentType,
       'content-length': Buffer.byteLength(payload).toString(),
     });
@@ -391,7 +399,8 @@ export function createApiServer(
   config: ApiConfig,
   sink: LogSink,
   routes: readonly ServiceRoute[] = [],
+  readiness?: () => Promise<void>,
 ): ApiServer {
   const logger = new StructuredLogger(config, sink);
-  return new ApiServer(config, logger, routes);
+  return new ApiServer(config, logger, routes, readiness);
 }

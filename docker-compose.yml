@@ -1,33 +1,98 @@
-# Local development with this checkout's installed dependencies and built output.
-# Build before starting; the API applies migrations on startup. Credentials below
-# are disposable local defaults, and published ports are loopback-only.
+name: navis
 services:
   postgres:
-    image: postgres:15-bookworm
-    ports:
-      - '127.0.0.1:55432:5432'
+    image: postgres:15-bookworm@sha256:93465ebc24cd8a2eeccabc1ada6c9344d6534d468765b4a0437560be6660ed02
+    command:
+      - postgres
+      - -c
+      - logging_collector=off
+      - -c
+      - log_destination=stderr
+      - -c
+      - log_statement=none
+      - -c
+      - log_min_duration_statement=-1
+      - -c
+      - log_min_error_statement=panic
+      - -c
+      - log_parameter_max_length=0
+      - -c
+      - log_parameter_max_length_on_error=0
+      - -c
+      - log_error_verbosity=terse
     environment:
       POSTGRES_USER: navis
-      POSTGRES_PASSWORD: navis
-      POSTGRES_DB: navis_test
+      POSTGRES_DB: navis
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres-password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    secrets:
+      - postgres-password
+    volumes:
+      - data:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U navis -d navis_test']
-      interval: 5s
-      timeout: 5s
-      retries: 10
+      test: ['CMD', 'pg_isready', '-h', '127.0.0.1', '-U', 'navis', '-d', 'navis']
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+      retries: 5
+    restart: unless-stopped
+    stop_grace_period: 30s
+    mem_limit: 768m
+    cpus: 2
+    shm_size: 128m
+    logging:
+      driver: local
+      options: { max-size: '10m', max-file: '3', compress: 'true' }
 
   api:
-    image: node:24-bookworm
-    working_dir: /navis
-    command: node services/api/dist/platform/index.js
+    image: navis-api:local
+    build:
+      context: .
+      args:
+        NAVIS_REVISION: ${NAVIS_REVISION:-development}
     environment:
-      DATABASE_URL: postgres://navis:navis@postgres:5432/navis_test
-      NAVIS_API_HOST: 0.0.0.0
-      NAVIS_API_PORT: '8080'
-    ports:
-      - '127.0.0.1:8080:8080'
-    volumes:
-      - ./:/navis
+      NAVIS_MODEL_BASE_URL: ${NAVIS_MODEL_BASE_URL:-}
+      NAVIS_MODEL_NAME: ${NAVIS_MODEL_NAME:-}
+      NAVIS_MODEL_DAILY_LIMIT: ${NAVIS_MODEL_DAILY_LIMIT:-100}
+      NAVIS_MODEL_PENDING_LIMIT: ${NAVIS_MODEL_PENDING_LIMIT:-32}
+      NAVIS_API_LOG_LEVEL: ${NAVIS_API_LOG_LEVEL:-info}
+      NAVIS_API_MAX_BODY_BYTES: '1048576'
+      NAVIS_API_MAX_LEDGER_BYTES: ${NAVIS_LEDGER_BYTES:-8388608}
+      NAVIS_API_SHUTDOWN_TIMEOUT_MS: '10000'
+      NODE_OPTIONS: --max-old-space-size=384
     depends_on:
       postgres:
         condition: service_healthy
+    secrets:
+      - database-url
+      - model-key
+    ports:
+      - '127.0.0.1:${NAVIS_API_PORT:-8080}:8080'
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+      - /run/navis:rw,noexec,nosuid,size=1m
+    cap_drop: [ALL]
+    # Bootstrap copies private secrets and drops privileges; init forwards signals across UIDs.
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, KILL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    stop_grace_period: 20s
+    mem_limit: ${NAVIS_API_MEMORY:-512m}
+    cpus: 2
+    pids_limit: 128
+    logging:
+      driver: local
+      options: { max-size: '10m', max-file: '3', compress: 'true' }
+
+volumes:
+  data:
+
+secrets:
+  database-url:
+    file: .local/secrets/database-url
+  postgres-password:
+    file: .local/secrets/postgres-password
+  model-key:
+    file: .local/secrets/model-key

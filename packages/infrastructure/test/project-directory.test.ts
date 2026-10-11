@@ -28,7 +28,7 @@ function summary(projectId: string, title: string, stateVersion = 0) {
 
 /** The three projections a directory page serves, as the adapter maps them. */
 function row(id: string, title: string, version = 0) {
-  return { id, title, status: 'active', current_state_version: version };
+  return { project_id: id, title, status: 'active', current_state_version: version };
 }
 
 describe('InMemoryProjectDirectory', () => {

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 import { textSchema } from './text.js';
@@ -44,6 +45,7 @@ export const assetContentSchema = z
   .strictObject({
     media_type: z.string().min(1).max(255),
     storage: assetContentStorageSchema,
+    text: z.string().max(65_536).optional(),
     ref: z.string().min(1).max(2048).optional(),
     size: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
     sha256: z
@@ -58,11 +60,22 @@ export const assetContentSchema = z
    * kind. inline content lives inside event payloads and points at nothing,
    * so inline forbids ref; every other storage kind requires it.
    */
-  .refine((v) => (v.storage === 'inline' ? v.ref === undefined : v.ref !== undefined), {
-    path: ['ref'],
-    error:
-      'ref is required unless storage is inline (inline content lives in event payloads and points nowhere), and forbidden when storage is inline',
-  })
+  .refine(
+    (v) =>
+      v.storage === 'inline' ? v.ref === undefined : v.ref !== undefined && v.text === undefined,
+    {
+      path: ['ref'],
+      error:
+        'ref is required unless storage is inline (inline content lives in event payloads and points nowhere), and forbidden when storage is inline',
+    },
+  )
+  .refine(
+    (value) =>
+      value.text === undefined ||
+      value.sha256 === undefined ||
+      createHash('sha256').update(value.text, 'utf8').digest('hex') === value.sha256,
+    { path: ['sha256'], error: 'inline content does not match its sha256' },
+  )
   .meta({
     description: 'Physical carrier of the asset content (media type, storage location, integrity).',
     id: 'AssetContent',

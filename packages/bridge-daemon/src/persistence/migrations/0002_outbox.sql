@@ -1,12 +1,4 @@
--- Outbox: machine-local buffering before upload (spec §the Outbox).
--- States: captured → normalized → pending → sending → acked, plus terminal
--- local_only and quarantined. seq is allocated only at normalized→pending so
--- local-only leftovers never open a gap in the server-side sequence.
---
--- retry_count / retry_after belong to the upload loop (task 6.4): on send
--- failure the row returns to pending with a next-attempt timestamp; on ack
--- the row is deleted. Nothing survives a SIGKILL mid-send — the WAL journal
--- keeps the last consistent checkpoint.
+-- Durable local captures; only validated server receipts permit deletion.
 CREATE TABLE outbox_events (
   event_id TEXT PRIMARY KEY,
   device_id TEXT NOT NULL,
@@ -34,3 +26,10 @@ CREATE TABLE outbox_events (
 CREATE INDEX idx_outbox_events_pending
   ON outbox_events (device_id, retry_after, seq)
   WHERE state = 'pending';
+
+-- Acknowledgment must not reset the sequence allocator.
+CREATE TABLE outbox_sequences (device_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL);
+
+-- Capture identities and causal heads outlive acknowledged Outbox rows.
+CREATE TABLE capture_receipts (event_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, captured_at TEXT NOT NULL);
+CREATE TABLE session_heads (session_key TEXT PRIMARY KEY, event_id TEXT NOT NULL);

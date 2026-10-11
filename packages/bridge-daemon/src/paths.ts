@@ -1,14 +1,15 @@
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { createHash } from 'node:crypto';
 
 /**
  * Platform-specific filesystem surfaces for the per-user daemon (spec: IPC
  * is a Unix domain socket on macOS/Linux and a named pipe on Windows).
  *
  * - `dataDir`  — durable state (the SQLite Outbox database lives here).
- * - `runtimeDir` — transient state (socket / lock), gone with a reboot; falls
- *   back to a per-user tmp directory when nothing honours XDG_RUNTIME_DIR.
+ * - `runtimeDir` — listener and lock state, scoped to the selected profile;
+ *   the default Unix profile uses XDG_RUNTIME_DIR or a private tmp directory.
  * - `socketPath` — on Unix the path the IPC listener binds; on Windows the
  *   named-pipe UNC path. The transport differs; everything past this string
  *   is identical.
@@ -22,9 +23,9 @@ export type PlatformCode = Extract<NodeJS.Platform, 'darwin' | 'linux' | 'win32'
 export interface DaemonPaths {
   /** Durable, user-owned data directory (Outbox database, binding table). */
   readonly dataDir: string;
-  /** Transient per-boot directory that holds the socket and the lock file. */
+  /** Listener and lock directory; explicit profiles may retain it across boots. */
   readonly runtimeDir: string;
-  /** Adventurous-`wx` lock file used by the single-instance gate. */
+  /** Private advisory lock file used by the single-instance gate. */
   readonly lockPath: string;
   /** Unix socket path on darwin/linux; named-pipe UNC path on win32. */
   readonly socketPath: string;
@@ -65,8 +66,7 @@ function runtimeHome(
   if (env['XDG_RUNTIME_DIR'] !== undefined && env['XDG_RUNTIME_DIR'] !== '') {
     return path.join(env['XDG_RUNTIME_DIR'], 'navis-bridge');
   }
-  // per-user tmp fallback: no owner-only guarantee the port advertises,
-  // so callers monkey with the lock file at their own risk on multi-user hosts
+  // IPC validates owner-only access before opening a socket in this fallback directory.
   return path.join(env['TMPDIR'] ?? os.tmpdir(), `navis-bridge-run-${String(uid)}`);
 }
 
@@ -87,19 +87,33 @@ export function resolveDaemonPaths(options: ResolvePathsOptions = {}): DaemonPat
   const env = options.env ?? process.env;
   const home = options.home ?? os.homedir();
   const uid = options.uid ?? (typeof process.getuid === 'function' ? process.getuid() : 0);
+  const hostPath = platform === 'win32' ? path.win32 : path;
 
-  const dataDir = dataHome(platform, env, home);
-  const runtimeDir = runtimeHome(platform, env, home, uid);
+  const dataDir =
+    env['NAVIS_HOME'] === undefined
+      ? dataHome(platform, env, home)
+      : hostPath.resolve(env['NAVIS_HOME']);
+  let runtimeDir =
+    env['NAVIS_HOME'] === undefined
+      ? runtimeHome(platform, env, home, uid)
+      : hostPath.join(dataDir, 'run');
+  const profile = createHash('sha256')
+    .update(platform === 'win32' ? dataDir.toLowerCase() : dataDir)
+    .digest('hex')
+    .slice(0, 24);
+  if (platform === 'win32') runtimeDir = hostPath.join(dataDir, 'run');
+  else if (Buffer.byteLength(path.join(runtimeDir, 'bridge.sock')) > 100)
+    runtimeDir = path.join(os.tmpdir(), `navis-${String(uid)}-${profile}`);
   return {
     dataDir,
     runtimeDir,
     lockPath:
       platform === 'win32'
-        ? path.join(dataDir, 'daemon.lock')
+        ? hostPath.join(dataDir, 'daemon.lock')
         : path.join(runtimeDir, 'daemon.lock'),
     socketPath:
       platform === 'win32'
-        ? `\\\\.\\pipe\\navis-bridge-${env['USERNAME'] ?? `uid-${String(uid)}`}`
+        ? `\\\\.\\pipe\\navis-bridge-${profile}`
         : path.join(runtimeDir, 'bridge.sock'),
     keychainService: 'navis-bridge',
     keychainAccount: `device-key-${env['USER'] ?? env['USERNAME'] ?? 'default'}`,

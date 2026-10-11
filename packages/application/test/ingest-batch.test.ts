@@ -370,3 +370,22 @@ it('records observations at the current ledger version when a snapshot is older'
   expect(replayed.stateVersion).toBe(1);
   expect(replayed.verifyIntegrity()).toEqual({ ok: true });
 });
+
+it('refuses capture under the current project policy without losing per-event rejection coverage', async () => {
+  const store = new InMemoryEventStore();
+  const good = input();
+  const result = await ingestBatch(
+    {
+      eventStore: store,
+      now: () => AT,
+      verifyPayloadHash: false,
+      canCapture: () => Promise.resolve(false),
+    },
+    { deviceId: DEVICE, events: [good, { ...good }, input({ event: { invalid: true } })] },
+  );
+  expect(result.accepted).toEqual([]);
+  expect(result.duplicate).toEqual([]);
+  expect(result.rejected).toHaveLength(3);
+  expect(result.event_results).toHaveLength(3);
+  expect(await store.headSeq(PROJECT)).toBe(0);
+});

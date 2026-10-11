@@ -34,9 +34,53 @@ export class SqliteOutbox implements OutboxPort {
   }
 
   async capture(input: OutboxCaptureInput): Promise<OutboxEvent> {
+    return Promise.resolve(this.#captureRecord(input));
+  }
+
+  /** Capture, its retry identity and causal predecessor commit together before a local receipt is returned. */
+  async captureOnce(
+    input: OutboxCaptureInput,
+    fingerprint: string,
+    sessionKey: string,
+  ): Promise<{ duplicate: boolean }> {
+    this.#db.exec('BEGIN IMMEDIATE');
+    try {
+      const prior = this.#db
+        .prepare('SELECT fingerprint FROM capture_receipts WHERE event_id=?')
+        .get(input.event_id) as { fingerprint: string } | undefined;
+      if (prior !== undefined) {
+        if (prior.fingerprint !== fingerprint)
+          throw new Error('capture identity conflicts with different content');
+        this.#db.exec('COMMIT');
+        return await Promise.resolve({ duplicate: true });
+      }
+      const head = this.#db
+        .prepare('SELECT event_id FROM session_heads WHERE session_key=?')
+        .get(sessionKey) as { event_id: string } | undefined;
+      this.#captureRecord({
+        ...input,
+        ...(head === undefined ? {} : { causation_id: head.event_id }),
+      });
+      this.#db
+        .prepare('INSERT INTO capture_receipts(event_id,fingerprint,captured_at) VALUES (?,?,?)')
+        .run(input.event_id, fingerprint, this.#now());
+      this.#db
+        .prepare(
+          'INSERT INTO session_heads(session_key,event_id) VALUES (?,?) ON CONFLICT(session_key) DO UPDATE SET event_id=excluded.event_id',
+        )
+        .run(sessionKey, input.event_id);
+      this.#db.exec('COMMIT');
+      return await Promise.resolve({ duplicate: false });
+    } catch (error) {
+      this.#db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  #captureRecord(input: OutboxCaptureInput): OutboxEvent {
     const now = this.#now();
     if (input.privacy_class === 'local-only') {
-      return Promise.resolve(this.#writeCaptureTerminal(input, now));
+      return this.#writeCaptureTerminal(input, now);
     }
     this.#write(
       `INSERT INTO outbox_events (
@@ -52,7 +96,7 @@ export class SqliteOutbox implements OutboxPort {
       now,
       input.event_json,
     );
-    return Promise.resolve(this.#expectGet(input.event_id));
+    return this.#expectGet(input.event_id);
   }
 
   get(eventId: string): Promise<OutboxEvent | null> {
@@ -73,8 +117,7 @@ export class SqliteOutbox implements OutboxPort {
       if (existing.state !== 'captured' && existing.state !== 'sending') {
         throw new Error(`cannot promote state ${existing.state} to pending`);
       }
-      const maxSeq = this.#maxSeq(existing.device_id);
-      const nextSeq = maxSeq + 1;
+      const nextSeq = existing.seq ?? this.#nextSeq(existing.device_id);
       this.#write(
         `UPDATE outbox_events
            SET state = 'pending', seq = ?, normalized_at = ?, sending_at = NULL, acked_at = NULL
@@ -135,13 +178,15 @@ export class SqliteOutbox implements OutboxPort {
     this.#db.exec('BEGIN');
     try {
       const mark = this.#db.prepare(
-        "UPDATE outbox_events SET state = 'acked', acked_at = ? WHERE event_id = ?",
+        "UPDATE outbox_events SET state = 'acked', acked_at = ? WHERE event_id = ? AND state = 'sending'",
       );
       const markTime = this.#now();
       for (const id of eventIds) {
         mark.run(markTime, id);
       }
-      const del = this.#db.prepare('DELETE FROM outbox_events WHERE event_id = ?');
+      const del = this.#db.prepare(
+        "DELETE FROM outbox_events WHERE event_id = ? AND state = 'acked'",
+      );
       for (const id of eventIds) {
         del.run(id);
       }
@@ -157,6 +202,7 @@ export class SqliteOutbox implements OutboxPort {
 
   releaseSending(
     eventIds: readonly string[],
+    notBefore?: string,
   ): Promise<readonly { eventId: string; retry_after: string | null }[]> {
     this.#db.exec('BEGIN');
     try {
@@ -164,7 +210,10 @@ export class SqliteOutbox implements OutboxPort {
       for (const id of eventIds) {
         const existing = this.#retryRow(id);
         const nextRetry = new Date(
-          new Date(this.#now()).getTime() + this.#backoffMs(existing.retry_count + 1),
+          Math.max(
+            new Date(this.#now()).getTime() + this.#backoffMs(existing.retry_count + 1),
+            notBefore === undefined ? 0 : Date.parse(notBefore),
+          ),
         ).toISOString();
         this.#db
           .prepare(
@@ -245,11 +294,14 @@ export class SqliteOutbox implements OutboxPort {
     return mapRow(row);
   }
 
-  #maxSeq(deviceId: string): number {
+  #nextSeq(deviceId: string): number {
     const row = this.#db
-      .prepare('SELECT COALESCE(MAX(seq), 0) AS max_seq FROM outbox_events WHERE device_id = ?')
-      .get(deviceId) as { max_seq: number };
-    return row.max_seq;
+      .prepare(
+        `INSERT INTO outbox_sequences (device_id,next_seq) VALUES (?,1)
+      ON CONFLICT(device_id) DO UPDATE SET next_seq=next_seq+1 RETURNING next_seq`,
+      )
+      .get(deviceId) as { next_seq: number };
+    return row.next_seq;
   }
 
   #write(sql: string, ...params: (string | number | null)[]): void {

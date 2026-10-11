@@ -1,8 +1,8 @@
 /** Event-label views, filtered history pages, and membership-scoped project search. */
 
 import type { EventEnvelope, EventStore } from '@navis/domain';
-import { ProjectStateKernel } from '@navis/domain';
-import { parseCanonicalWorkEventPayload } from '@navis/contracts';
+import { ProjectStateKernel, serializeProjectionStateRecord } from '@navis/domain';
+import { parseCanonicalWorkEventPayload, projectProjectionSchema } from '@navis/contracts';
 import type {
   ContextEntry,
   ContextFilterType,
@@ -26,7 +26,7 @@ const FILTER_PREFIXES: Readonly<Record<ContextFilterType, readonly string[]>> = 
   hold: ['hold.'],
   acceptance: ['acceptance.'],
   delivery: ['delivery.'],
-  session: ['intervention.'],
+  session: ['intervention.', 'user.message', 'agent.message', 'tool.call.'],
 };
 
 /** A ledger entry admitted by the filter: seq + the sort keys the cursor rides. */
@@ -36,6 +36,8 @@ interface ContextRow {
   readonly event_type: string;
   readonly occurred_at: string;
   readonly summary: string;
+  readonly payload: EventEnvelope['payload'];
+  readonly metadata: EventEnvelope['metadata'];
 }
 
 /**
@@ -51,14 +53,28 @@ function encodeCursor(payload: unknown): string {
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url').replace(/=+$/u, '');
 }
 
-function decodeCursor(cursor: string): ContextCursor {
-  const json = Buffer.from(cursor, 'base64url').toString('utf8');
-  const parsed = JSON.parse(json) as { seq?: unknown };
-  const seq = parsed.seq;
-  if (typeof seq !== 'number' || !Number.isInteger(seq) || seq < 1) {
-    throw new Error('invalid context cursor');
+export class InvalidQueryCursorError extends Error {
+  constructor(kind: 'context' | 'project') {
+    super(`invalid ${kind} cursor`);
   }
-  return { seq };
+}
+
+function decodeCursor(cursor: string): ContextCursor {
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      !('seq' in parsed) ||
+      typeof parsed.seq !== 'number' ||
+      !Number.isInteger(parsed.seq) ||
+      parsed.seq < 1
+    )
+      throw new InvalidQueryCursorError('context');
+    return { seq: parsed.seq };
+  } catch {
+    throw new InvalidQueryCursorError('context');
+  }
 }
 
 /** Folds the envelope into the row a history slice serves. */
@@ -69,6 +85,8 @@ function toContextRow(envelope: EventEnvelope): ContextRow {
     event_type: envelope.event_type,
     occurred_at: envelope.occurred_at,
     summary: labelOf(envelope),
+    payload: envelope.payload,
+    metadata: envelope.metadata,
   };
 }
 
@@ -81,7 +99,7 @@ function admits(filter: ContextFilterType, envelope: EventEnvelope): boolean {
 async function rebuildProjection(
   store: EventStore,
   projectId: string,
-): Promise<{ stateVersion: number }> {
+): Promise<{ kernel: ProjectStateKernel; events: readonly EventEnvelope[] }> {
   // the kernel rebuilds from the full log: the causal clock needs every
   // authorship event, and the replay path is the audit that the planes and
   // the version agree
@@ -99,7 +117,7 @@ async function rebuildProjection(
     undefined,
     parseCanonicalWorkEventPayload,
   );
-  return { stateVersion: kernel.stateVersion };
+  return { kernel, events: full };
 }
 
 /** Anchors a plane item at its ledger entry. */
@@ -139,23 +157,57 @@ export async function getProjectState(
   store: EventStore,
   projectId: string,
 ): Promise<ProjectStateResponse> {
-  const { stateVersion } = await rebuildProjection(store, projectId);
-  const events = await store.loadEvents(projectId, 0);
+  const { kernel, events } = await rebuildProjection(store, projectId);
+  const stateVersion = kernel.stateVersion;
+  const projection = {
+    ...kernel.projection,
+    assets: Object.fromEntries(kernel.listAssets().map((asset) => [asset.id, asset])),
+  };
+  const currentLabels = new Map([
+    ...Object.values(projection.works)
+      .filter((row) => row.deleted_at === undefined)
+      .map((row) => [row.id, row.title] as const),
+    ...Object.values(projection.holds)
+      .filter((row) => row.deleted_at === undefined)
+      .map((row) => [row.id, row.statement] as const),
+    ...Object.values(projection.work_runs)
+      .filter((row) => row.deleted_at === undefined)
+      .map((row) => [row.id, row.status] as const),
+  ]);
+  const current = new Map<string, TimePlaneItem>();
+  for (const event of events) {
+    if (!inFamilies(CURRENT_FAMILIES, event.event_type)) continue;
+    const key = event.event_type.startsWith('workrun.')
+      ? 'run_id'
+      : event.event_type.startsWith('hold.')
+        ? 'hold_id'
+        : 'work_id';
+    const id = event.payload[key];
+    if (typeof id === 'string') {
+      const label = currentLabels.get(id);
+      if (label !== undefined)
+        current.set(id, planeItem(event.seq, event.event_type, event.occurred_at, label));
+    }
+  }
   const planes = {
     history: events
       .filter((e) => inFamilies(HISTORY_FAMILIES, e.event_type))
       .filter((e) => e.event_type !== 'project.policy_updated')
       .map((e) => planeItem(e.seq, e.event_type, e.occurred_at, labelOf(e))),
-    current: events
-      .filter((e) => inFamilies(CURRENT_FAMILIES, e.event_type))
-      .map((e) => planeItem(e.seq, e.event_type, e.occurred_at, labelOf(e))),
+    current: [...current.values()].sort((a, b) => a.anchor.seq - b.anchor.seq),
     intended: events
       .filter((e) => inFamilies(INTENDED_FAMILIES, e.event_type))
+      .filter((e) => {
+        const id = e.payload['direction_id'];
+        return typeof id === 'string' && projection.intended_directions[id]?.status === 'proposed';
+      })
       .map((e) => planeItem(e.seq, e.event_type, e.occurred_at, labelOf(e))),
   };
   return {
     project_id: projectId,
     state_version: stateVersion,
+    ledger_seq: kernel.currentSeq,
+    projection: projectProjectionSchema.parse(serializeProjectionStateRecord(projection)),
     planes,
     change_marker: 'advanced',
   };
@@ -198,6 +250,8 @@ export async function loadContext(
     occurred_at: row.occurred_at,
     event_id: row.event_id,
     summary: row.summary,
+    payload: row.payload,
+    metadata: row.metadata,
   }));
   const last = page[page.length - 1];
   const nextCursor = hasMore && last !== undefined ? encodeCursor({ seq: last.seq }) : undefined;
@@ -266,12 +320,16 @@ interface ProjectDirectoryLike {
 }
 
 function decodeProjectCursor(cursor: string): { title: string; project_id: string } {
-  const json = Buffer.from(cursor, 'base64url').toString('utf8');
-  const parsed = JSON.parse(json) as { title?: unknown; id?: unknown };
-  const title = parsed.title;
-  const projectId = parsed.id;
-  if (typeof title !== 'string' || typeof projectId !== 'string') {
-    throw new Error('invalid project cursor');
+  try {
+    const json = Buffer.from(cursor, 'base64url').toString('utf8');
+    const parsed = JSON.parse(json) as { title?: unknown; id?: unknown };
+    const title = parsed.title;
+    const projectId = parsed.id;
+    if (typeof title !== 'string' || typeof projectId !== 'string') {
+      throw new Error('invalid project cursor');
+    }
+    return { title, project_id: projectId };
+  } catch {
+    throw new InvalidQueryCursorError('project');
   }
-  return { title, project_id: projectId };
 }

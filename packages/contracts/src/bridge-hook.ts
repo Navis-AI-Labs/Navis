@@ -75,6 +75,7 @@ export const bridgeHookResultSchema = z.discriminatedUnion('status', [
       event_id: uuidRefSchema,
       project_id: uuidRefSchema,
       change_marker: bridgeHookStateChangeSchema,
+      ledger_seq: z.int().nonnegative().optional(),
       context_summary: bridgeHookContextSummarySchema.optional(),
       cached_at: instantWireSchema.optional(),
     })

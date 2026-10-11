@@ -42,6 +42,7 @@ function privacyClassFor(eventType: string): 'evidence' | 'work' | 'audit' {
 
 /** Ports the use case needs; concrete adapters are injected, never imported. */
 export interface IngestBatchDeps {
+  readonly canCapture?: (projectId: string) => Promise<boolean>;
   readonly eventStore: EventStore;
   /** Per-project switch for server-side payload verification. */
   readonly verifyPayloadHash: boolean;
@@ -59,6 +60,7 @@ export interface IngestEventInput {
 
 export interface IngestBatchRequest {
   readonly deviceId: string;
+  readonly participantId?: string;
   readonly events: readonly IngestEventInput[];
 }
 
@@ -181,6 +183,24 @@ export async function ingestBatch(
     }
   }
 
+  if (deps.canCapture !== undefined && !(await deps.canCapture(projectId))) {
+    const rejectedIndexes = new Set(rejections.map((item) => item.index));
+    const denied = [
+      ...rejections,
+      ...request.events.flatMap((_item, index) =>
+        rejectedIndexes.has(index)
+          ? []
+          : [{ index, token: ingestRejectionTokens.authorization_denied }],
+      ),
+    ];
+    return {
+      projectId,
+      accepted: [],
+      duplicate: [],
+      rejected: denied,
+      event_results: resultsFor(request.events.length, [], denied, []),
+    };
+  }
   const identities = await deps.eventStore.existingEventIdentities(
     projectId,
     toAppend.map((entry) => entry.input.event_id),
@@ -254,7 +274,7 @@ function toEnvelope(
     event_schema_version: entry.event.schema_version,
     occurred_at: entry.event.occurred_at,
     recorded_at: recordedAt,
-    actor_participant_id: null,
+    actor_participant_id: request.participantId ?? null,
     causation_id: entry.input.causation_id ?? null,
     correlation_id: null,
     idempotency_key: `${request.deviceId}:${entry.input.event_id}`,
@@ -264,6 +284,9 @@ function toEnvelope(
       source_runtime: entry.event.source_runtime,
       source_session_id: entry.event.source_session_id,
       extractor_version: entry.event.extractor_version,
+      raw_ref: entry.event.raw_ref,
+      confidence: entry.event.confidence,
+      review_status: entry.event.review_status,
     },
     privacy_class: privacyClassFor(entry.event.event_type),
     state_version: stateVersion,

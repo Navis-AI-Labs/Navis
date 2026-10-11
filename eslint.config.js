@@ -21,16 +21,7 @@ export default tseslint.config(
     files: ['**/*.ts'],
     languageOptions: {
       parserOptions: {
-        project: [
-          './tsconfig.tooling.json',
-          './packages/contracts/tsconfig.test.json',
-          './packages/domain/tsconfig.test.json',
-          './packages/infrastructure/tsconfig.test.json',
-          './packages/application/tsconfig.test.json',
-          './packages/bridge-daemon/tsconfig.test.json',
-          './packages/cli/tsconfig.test.json',
-          './services/api/tsconfig.test.json',
-        ],
+        project: ['./tsconfig.tooling.json'],
         tsconfigRootDir: import.meta.dirname,
       },
     },

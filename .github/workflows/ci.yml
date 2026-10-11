@@ -14,8 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Cross-platform gate: the bridge-daemon ships on three OSes, so format /
-  # build / lint / typecheck / deps boundaries / unit tests must pass on each.
+  # Portable contracts/domain and static checks run across host platforms.
+  # Database, process and container deployment checks run in the Linux lane.
   validate:
     name: Validate repository (${{ matrix.os }})
     strategy:
@@ -43,8 +43,18 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run repository validation
-        run: pnpm validate
+      - name: Validate source and contracts
+        run: pnpm format:check && pnpm build && pnpm lint && pnpm typecheck && pnpm boundaries && pnpm openspec:validate
+      - name: Run portable contract and domain tests
+        run: pnpm exec vitest run packages/contracts/test packages/domain/test --coverage.enabled=false
+      - name: Verify native setup, launchers and source lint
+        run: node --test scripts/test/client-installation.test.mjs scripts/test/instance-setup.test.mjs scripts/test/source-lint.test.mjs
+      - name: Install independent client artifact
+        run: pnpm instance install-client
+      - name: Exercise installed native client and profile isolation
+        run: pnpm exec vitest run packages/cli/test/native-client.test.ts --coverage.enabled=false
+        env:
+          NAVIS_CLI_TEST_ENTRY: ${{ github.workspace }}/.local/bin/navis-entry.mjs
 
   # Real-database lane: separates from the matrix because GitHub service
   # containers only run on Linux runners. Zero skips are enforced — a
@@ -79,16 +89,14 @@ jobs:
           node-version: 24.19.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Build all packages
-        run: pnpm build
-      - name: Run full suite against PostgreSQL
-        run: pnpm exec vitest run --reporter=default --reporter=json --outputFile.json="${{ runner.temp }}/navis-postgres-tests.json"
+      - name: Run complete validation against PostgreSQL
+        run: pnpm validate
         env:
           DATABASE_URL: postgres://navis:navis@127.0.0.1:5432/navis_test
       - name: Require a successful report with zero skipped tests
         if: always()
         env:
-          NAVIS_TEST_REPORT: ${{ runner.temp }}/navis-postgres-tests.json
+          NAVIS_TEST_REPORT: coverage/test-results.json
         run: |
           node --input-type=module -e '
             import { readFileSync } from "node:fs";

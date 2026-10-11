@@ -1,3 +1,4 @@
+import { capturePrivacySchema } from '../schema/project.js';
 import { z } from 'zod';
 
 import { acceptanceResultSchema } from '../schema/acceptance.js';
@@ -51,13 +52,17 @@ const schemas: Readonly<Record<string, z.ZodType>> = {
     .strictObject({
       actor,
       reason,
+      capture_privacy: capturePrivacySchema.optional(),
       event_count_window: z.number().int().positive().optional(),
       time_window_days: z.number().positive().optional(),
     })
     .refine(
-      (value) => value.event_count_window !== undefined || value.time_window_days !== undefined,
+      (value) =>
+        value.event_count_window !== undefined ||
+        value.time_window_days !== undefined ||
+        value.capture_privacy !== undefined,
       {
-        error: 'a policy update must carry at least one window',
+        error: 'a policy update must carry at least one setting',
       },
     ),
   'project.boundary_updated': z

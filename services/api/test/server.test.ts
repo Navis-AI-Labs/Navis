@@ -312,19 +312,23 @@ describe('api server', () => {
     expect(failure['error_name']).toBe('Error');
   });
 
-  it('logs each handled request', async () => {
-    const { port, lines } = await startServer();
-    await call(port, 'GET', '/healthz');
+  it('logs successful business requests at info level', async () => {
+    const { port, lines } = await startServer({ routes: [echo] });
+    await call(port, 'POST', '/echo', '{}', { 'content-type': 'application/json' });
     const record = requiredLine(lines, 'request handled');
-    expect(record['method']).toBe('GET');
-    expect(record['path']).toBe('/healthz');
+    expect(record['method']).toBe('POST');
+    expect(record['path']).toBe('/echo');
+    expect(record['level']).toBe('info');
     expect(record['status']).toBe(200);
     expect(record['request_id']).toBeDefined();
   });
 
   it('masks log fields the allowlist does not carry', async () => {
-    const { port, lines } = await startServer({ config: { log_redaction_allowlist: [] } });
-    await call(port, 'GET', '/healthz');
+    const { port, lines } = await startServer({
+      routes: [echo],
+      config: { log_redaction_allowlist: [] },
+    });
+    await call(port, 'POST', '/echo', '{}', { 'content-type': 'application/json' });
     const handled = requiredLine(lines, 'request handled');
     expect(handled['method']).toBe('[masked]');
   });

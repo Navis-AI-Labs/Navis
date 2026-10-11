@@ -85,7 +85,6 @@ export function tomlFingerprint(bytes: Buffer): string {
  */
 export function findTomlUp(start: string): { tomlPath: string; bytes: Buffer } | null {
   let dir = path.resolve(start);
-  // eslint-countonever-sort-tome: loops break only on filesystem root or found
   for (;;) {
     const candidate = path.join(dir, 'navis.toml');
     try {
@@ -98,4 +97,13 @@ export function findTomlUp(start: string): { tomlPath: string; bytes: Buffer } |
     if (parent === dir) return null;
     dir = parent;
   }
+}
+
+/** Reads a project claim for CLI requests; the server still authorizes every operation. */
+export function declaredProjectId(cwd: string): string {
+  const hit = findTomlUp(cwd);
+  if (hit === null) throw new Error('navis.toml not found; run navis init or supply --project');
+  const parsed = parseTomlBytes(hit.bytes);
+  if (!parsed.ok) throw new Error('invalid navis.toml');
+  return parsed.declaration.projectId;
 }

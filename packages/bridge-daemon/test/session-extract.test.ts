@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { canonicalWorkEventStrictSchema } from '@navis/contracts';
 
 import { extractSessionEvents, type RawSessionStep } from '../src/session/extract.js';
 
@@ -26,12 +27,13 @@ describe('session event extraction', () => {
     expect(events.length).toBe(3);
 
     for (const ev of events) {
-      const payload = JSON.parse(ev.event_json) as {
-        data: Record<string, unknown>;
+      const parsed = canonicalWorkEventStrictSchema.parse(JSON.parse(ev.event_json));
+      const payload = parsed.payload as {
+        privacy: { sha256: string; char_length: number; summary: string };
       };
-      expect(typeof payload.data['sha256']).toBe('string');
-      expect(typeof payload.data['length']).toBe('number');
-      expect(typeof payload.data['summary']).toBe('string');
+      expect(typeof payload.privacy.sha256).toBe('string');
+      expect(typeof payload.privacy.char_length).toBe('number');
+      expect(typeof payload.privacy.summary).toBe('string');
       // content fields must be absent, not redacted-null — nothing to leak
       expect(ev.event_json).not.toContain('production database');
       expect(ev.event_json).not.toContain('"command"');
@@ -48,10 +50,12 @@ describe('session event extraction', () => {
       { kind: 'tool.call.result', tool: 'fs.write', result: 'wrote 42 bytes' },
     ];
     const events = extractSessionEvents(steps, { ...OPTIONS, privacyClass: 'metadata' });
-    const requested = JSON.parse(events[0]?.event_json ?? '') as { data: Record<string, unknown> };
-    const result = JSON.parse(events[1]?.event_json ?? '') as { data: Record<string, unknown> };
-    expect(requested.data['tool']).toBe('fs.write');
-    expect(result.data['tool']).toBe('fs.write');
+    const requested = JSON.parse(events[0]?.event_json ?? '') as {
+      payload: Record<string, unknown>;
+    };
+    const result = JSON.parse(events[1]?.event_json ?? '') as { payload: Record<string, unknown> };
+    expect(requested.payload['tool_name']).toBe('fs.write');
+    expect(result.payload['tool_name']).toBe('fs.write');
     expect(events[0]?.event_json).not.toContain('/etc/passwd');
     expect(events[1]?.event_json).not.toContain('wrote 42 bytes');
   });
@@ -61,11 +65,11 @@ describe('session event extraction', () => {
     const steps: RawSessionStep[] = [{ kind: 'user.message', body: longBody }];
     const [ev] = extractSessionEvents(steps, { ...OPTIONS, privacyClass: 'metadata' });
     const payload = JSON.parse(ev?.event_json ?? '') as {
-      data: { summary: string; length: number };
+      payload: { privacy: { summary: string; char_length: number } };
     };
-    expect(payload.data.summary.length).toBeLessThanOrEqual(121);
-    expect(payload.data.summary).not.toContain('\n');
-    expect(payload.data.length).toBe(longBody.length);
+    expect(payload.payload.privacy.summary.length).toBeLessThanOrEqual(121);
+    expect(payload.payload.privacy.summary).not.toContain('\n');
+    expect(payload.payload.privacy.char_length).toBe(longBody.length);
   });
 
   it('causation links each event to its predecessor so replay recovers order', () => {
@@ -106,7 +110,7 @@ describe('session event extraction', () => {
     });
     expect(ev?.privacy_class).toBe('local-only');
     // extraction shape is identical; the outbox parks it (null seq forever)
-    expect(JSON.parse(ev?.event_json ?? '')).toHaveProperty('data.sha256');
+    expect(JSON.parse(ev?.event_json ?? '')).toHaveProperty('payload.privacy.sha256');
   });
 
   it('handles an empty step list without emitting a spurious root', () => {
